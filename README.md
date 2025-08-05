@@ -4,17 +4,22 @@ A comprehensive set of tools for neoadjuvant immunotherapy response prediction i
 
 ## 📋 Overview
 
-This project provides tools for processing medical imaging data, specifically DICOM to NIfTI conversion, which is a crucial step in radiomics analysis pipelines for breast cancer research.
+This project provides tools for processing medical imaging data in breast cancer radiomics analysis pipelines, including:
+
+1. **DICOM to NIfTI Conversion**: Essential preprocessing step for medical image analysis
+2. **IRM to nnUNet Conversion**: Preparation of MRI data for deep learning segmentation with nnUNet
+
+These tools are crucial steps in radiomics analysis pipelines for breast cancer research.
 
 ## 🏗️ Project Structure
 
 ```
-final_codes/
+BREAST-CANCER-RADIOMICS/
 ├── src/                          # Core functional modules
-│   └── dcm2nii.py              # DICOM to NIfTI conversion module
-├── dcm2nii_use_case.py          # Example usage and batch processing
-├── BREAST-CANCER-RADIOMICS/     # Research-specific documentation
-│   └── README.md                # Detailed research methodology
+│   ├── dcm2nii.py              # DICOM to NIfTI conversion module
+│   └── irm2nnunet.py           # IRM to nnUNet conversion module
+├── dcm2nii_use_case.py          # DICOM to NIfTI batch processing example
+├── irm2nnunet_use_case.py       # IRM to nnUNet conversion example
 ├── test_conversion.py           # Installation test script
 ├── requirements.txt             # Python dependencies
 ├── setup.py                    # Package installation configuration
@@ -57,7 +62,9 @@ The main dependencies for this project are:
 
 ## 🛠️ Usage
 
-### Basic DICOM to NIfTI Conversion
+### 1. DICOM to NIfTI Conversion
+
+#### Basic DICOM to NIfTI Conversion
 
 ```python
 from src.dcm2nii import dicom2nifti
@@ -66,7 +73,7 @@ from src.dcm2nii import dicom2nifti
 dicom2nifti("path/to/dicom/folder", "output/directory", prefix="subject_001")
 ```
 
-### Command Line Usage
+#### Command Line Usage
 
 ```bash
 # Convert a single DICOM series
@@ -76,16 +83,39 @@ python src/dcm2nii.py /path/to/dicom/folder /output/directory --prefix subject_0
 python dcm2nii_use_case.py /path/to/input/root /path/to/output/root
 ```
 
-### Advanced Usage with Custom Modalities
+#### Advanced Usage with Custom Modalities
 
 ```bash
 # Process specific modalities only
 python dcm2nii_use_case.py /input/root /output/root --modalities IRM TEP
 ```
 
-## 📁 Input Structure
+### 2. IRM to nnUNet Conversion
 
-The batch processing script expects the following directory structure:
+#### Basic IRM to nnUNet Conversion
+
+```python
+from src.irm2nnunet import extract_irm_to_nnunet_flat
+
+# Convert IRM files to nnUNet format
+extract_irm_to_nnunet_flat(
+    subjects_dir="/path/to/subjects",
+    nnunet_root="/path/to/nnunet",
+    dataset_id=1,
+    irm_suffix="_IRM.nii.gz"
+)
+```
+
+#### Command Line Usage
+
+```bash
+# Convert IRM files to nnUNet format
+python irm2nnunet_use_case.py /path/to/subjects /path/to/nnunet --dataset-id 1
+```
+
+## 📁 Input/Output Structures
+
+### DICOM to NIfTI Input Structure
 
 ```
 input_root/
@@ -99,9 +129,7 @@ input_root/
 └── ...
 ```
 
-## 📤 Output Structure
-
-The conversion process creates the following output structure:
+### DICOM to NIfTI Output Structure
 
 ```
 output_root/
@@ -113,6 +141,36 @@ output_root/
 │   ├── subject_002_IRM.nii.gz
 │   └── subject_002_TEP.nii.gz
 └── ...
+```
+
+### IRM to nnUNet Input Structure
+
+```
+subjects_dir/
+├── subject_001/
+│   └── subject_001_IRM.nii.gz
+├── subject_002/
+│   └── subject_002_IRM.nii.gz
+└── ...
+```
+
+### IRM to nnUNet Output Structure
+
+```
+nnunet_root/
+└── nnunetv2/
+    ├── nnUNet_raw/
+    │   └── Dataset001/
+    │       ├── imagesTr/
+    │       │   ├── subject_001_0000.nii.gz
+    │       │   └── subject_002_0000.nii.gz
+    │       ├── labelsTr/
+    │       └── imagesTs_pred3dfullres/
+    ├── nnUNet_preprocessed/
+    └── nnUNet_results/
+        └── Dataset001/
+            └── nnUNetTrainer__nnUNetPlans__3d_fullres/
+                └── fold_0/
 ```
 
 ## 🔧 API Reference
@@ -133,9 +191,19 @@ Converts a DICOM series to NIfTI format.
 - `FileNotFoundError`: If the DICOM folder doesn't exist
 - `RuntimeError`: If no DICOM series is found in the folder
 
+### `src.irm2nnunet.extract_irm_to_nnunet_flat()`
+
+Converts IRM NIfTI files to nnUNet format with full directory structure.
+
+**Parameters:**
+- `subjects_dir` (str): Root directory with subject folders
+- `nnunet_root` (str): Base directory where nnUNet structure will be created
+- `dataset_id` (int): Dataset number (e.g., 1 → Dataset001)
+- `irm_suffix` (str): Suffix for IRM files (default: "_IRM.nii.gz")
+
 ### `dcm2nii_use_case.process_subjects()`
 
-Processes multiple subjects with batch conversion.
+Processes multiple subjects with batch DICOM to NIfTI conversion.
 
 **Parameters:**
 - `input_root` (str): Root input directory containing subject folders
@@ -144,15 +212,18 @@ Processes multiple subjects with batch conversion.
 
 ## 🧪 Testing
 
-To test the conversion process:
+To test the conversion processes:
 
 1. Create a sample directory structure with DICOM files
-2. Run the conversion script
-3. Verify the output NIfTI files
+2. Run the conversion scripts
+3. Verify the output files
 
 ```bash
-# Example test run
+# Test DICOM to NIfTI conversion
 python dcm2nii_use_case.py ./test_data/input ./test_data/output
+
+# Test IRM to nnUNet conversion
+python irm2nnunet_use_case.py ./test_data/output ./test_data/nnunet --dataset-id 1
 ```
 
 ## 🤝 Contributing
@@ -174,6 +245,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - SimpleITK development team for the excellent medical image processing library
+- nnUNet development team for the segmentation framework
 - The medical imaging community for open-source contributions
 
 ## 📊 Citation

@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2025-01-XX
 
 ### Added
-- Core DICOM to NIfTI conversion module (`dcm2nii.py`)
+- Core DICOM to NIfTI conversion module (`src/dcm2nii.py`)
+- IRM to nnUNet conversion module (`src/irm2nnunet.py`)
 - Batch processing script for multiple subjects (`dcm2nii_use_case.py`)
+- IRM to nnUNet conversion script (`irm2nnunet_use_case.py`)
 - Comprehensive README documentation
 - Requirements.txt with dependency specifications
 - Setup.py for package installation
@@ -31,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 - **DICOM Series Reading**: Automatic detection and reading of DICOM series
 - **NIfTI Export**: Conversion to compressed NIfTI format (.nii.gz)
+- **IRM to nnUNet Conversion**: Preparation of MRI data for deep learning segmentation
+- **nnUNet Directory Structure**: Automatic creation of full nnUNet v2 folder structure
 - **Batch Processing**: Process multiple subjects and modalities
 - **Error Handling**: Robust error handling and validation
 - **Command Line Interface**: Easy-to-use CLI for both single and batch operations
@@ -39,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical Details
 - Uses SimpleITK for medical image processing
 - Supports multiple modalities (IRM, TEP, TDM)
+- Creates full nnUNet v2 directory structure
 - Automatic output directory creation
 - Configurable file naming conventions
 - Progress reporting and error logging

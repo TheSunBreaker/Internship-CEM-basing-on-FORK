@@ -6,12 +6,12 @@ Your breast cancer radiomics project is now ready for GitHub submission! Here's 
 
 ### 📁 Project Structure
 ```
-final_codes/
+BREAST-CANCER-RADIOMICS/
 ├── src/                        # Core functional modules
-│   └── dcm2nii.py            # DICOM to NIfTI conversion module
-├── dcm2nii_use_case.py        # Example usage and batch processing
-├── BREAST-CANCER-RADIOMICS/   # Research-specific documentation
-│   └── README.md              # Detailed research methodology
+│   ├── dcm2nii.py            # DICOM to NIfTI conversion module
+│   └── irm2nnunet.py         # IRM to nnUNet conversion module
+├── dcm2nii_use_case.py        # DICOM to NIfTI batch processing example
+├── irm2nnunet_use_case.py     # IRM to nnUNet conversion example
 ├── test_conversion.py          # Installation test script
 ├── requirements.txt            # Python dependencies
 ├── setup.py                   # Package installation configuration

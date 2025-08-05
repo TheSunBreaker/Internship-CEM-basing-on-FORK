@@ -38,6 +38,20 @@ def test_imports():
         print(f"Failed to import dcm2nii_use_case: {e}")
         return False
     
+    try:
+        from src.irm2nnunet import extract_irm_to_nnunet_flat
+        print("irm2nnunet module imported successfully")
+    except ImportError as e:
+        print(f"Failed to import irm2nnunet: {e}")
+        return False
+    
+    try:
+        from irm2nnunet_use_case import main as irm2nnunet_main
+        print("irm2nnunet_use_case module imported successfully")
+    except ImportError as e:
+        print(f"Failed to import irm2nnunet_use_case: {e}")
+        return False
+    
     return True
 
 def test_simpleitk_version():

@@ -36,6 +36,7 @@ setup(
         "console_scripts": [
             "dcm2nii=src.dcm2nii:main",
             "dcm2nii-batch=dcm2nii_use_case:main",
+            "irm2nnunet=irm2nnunet_use_case:main",
         ],
     },
     keywords="medical imaging, radiomics, breast cancer, DICOM, NIfTI, SimpleITK",
