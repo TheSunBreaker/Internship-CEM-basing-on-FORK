@@ -113,6 +113,66 @@ extract_irm_to_nnunet_flat(
 python irm2nnunet_use_case.py /path/to/subjects /path/to/nnunet --dataset-id 1
 ```
 
+### 3. nnUNet Inference
+
+#### Prerequisites Setup
+
+Before running nnUNet inference, you need to set up the environment and install nnUNet:
+
+```bash
+# 0. If not created already, make an environment and activate it
+python -m venv nnunet_env
+source nnunet_env/bin/activate  # On Windows: nnunet_env\Scripts\activate
+
+# 1. Install nnUNet
+pip install nnunetv2
+
+# 2. Set nnUNet folders as environment variables
+export nnUNet_raw=~/nnUNet_raw
+export nnUNet_preprocessed=~/nnUNet_preprocessed
+export nnUNet_results=~/nnUNet_results
+```
+
+#### Dataset Preparation
+
+```bash
+# 3. Make sure the dataset.json file exists and is pasted in the nnUNet_raw folder
+# The dataset.json should be in: ~/nnUNet_raw/Dataset001/dataset.json
+
+# 4. Make sure to have the pretrained model in the nnUNet_results folder 
+# with the dataset.json, dataset_fingerprint.json and plans.json files
+# Structure should be: ~/nnUNet_results/Dataset001/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/
+```
+
+#### Running Inference
+
+```bash
+# 5. Run Infer command
+nnUNetv2_predict \
+    -d <DATASET_ID> \
+    -i /path/to/imagesTs \
+    -o /path/to/output \
+    -c 3d_fullres \
+    -f 0
+```
+
+**Parameters:**
+- `-d <DATASET_ID>`: Dataset ID (e.g., 1 for Dataset001)
+- `-i /path/to/imagesTs`: Path to the test images directory
+- `-o /path/to/output`: Path to the output directory for predictions
+- `-c 3d_fullres`: Configuration (3d_fullres for 3D full resolution)
+- `-f 0`: Fold number (0 for single fold)
+
+**Example:**
+```bash
+nnUNetv2_predict \
+    -d 1 \
+    -i ~/nnUNet_raw/Dataset001/imagesTs \
+    -o ~/predictions \
+    -c 3d_fullres \
+    -f 0
+```
+
 ## 📁 Input/Output Structures
 
 ### DICOM to NIfTI Input Structure
