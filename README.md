@@ -8,8 +8,10 @@ This project provides tools for processing medical imaging data in breast cancer
 
 1. **DICOM to NIfTI Conversion**: Essential preprocessing step for medical image analysis
 2. **IRM to nnUNet Conversion**: Preparation of MRI data for deep learning segmentation with nnUNet
+3. **nnUNet Inference**: Deep learning segmentation for tumor detection
+4. **PCR Prediction**: Pathological Complete Response prediction from segmented images
 
-These tools are crucial steps in radiomics analysis pipelines for breast cancer research.
+These tools form a complete pipeline from raw DICOM images to PCR prediction, crucial for radiomics analysis pipelines in breast cancer research.
 
 ## 🏗️ Project Structure
 
@@ -17,9 +19,14 @@ These tools are crucial steps in radiomics analysis pipelines for breast cancer 
 BREAST-CANCER-RADIOMICS/
 ├── src/                          # Core functional modules
 │   ├── dcm2nii.py              # DICOM to NIfTI conversion module
-│   └── irm2nnunet.py           # IRM to nnUNet conversion module
+│   ├── irm2nnunet.py           # IRM to nnUNet conversion module
+│   ├── nnunet_inference.py     # nnUNet inference module
+│   └── pcr_prediction.py       # PCR prediction module
 ├── dcm2nii_use_case.py          # DICOM to NIfTI batch processing example
 ├── irm2nnunet_use_case.py       # IRM to nnUNet conversion example
+├── nnunet_inference_use_case.py # nnUNet inference example
+├── pcr_prediction_use_case.py   # PCR prediction example
+├── complete_pipeline.py         # Complete pipeline from DICOM to PCR
 ├── test_conversion.py           # Installation test script
 ├── requirements.txt             # Python dependencies
 ├── setup.py                    # Package installation configuration
@@ -59,6 +66,55 @@ The main dependencies for this project are:
 - **SimpleITK**: For medical image processing and DICOM handling
 - **pathlib**: For cross-platform path handling (included in Python 3.4+)
 - **argparse**: For command-line argument parsing (included in Python standard library)
+- **nnunetv2**: For deep learning segmentation
+- **numpy**: For numerical computations
+- **scikit-learn**: For machine learning models
+- **pandas**: For data manipulation
+- **matplotlib**: For visualization
+- **seaborn**: For statistical visualization
+
+## 🌐 Environment Setup
+
+### Creating and Activating Virtual Environment
+
+```bash
+# Create a new virtual environment
+python3 -m venv <myvenv>
+
+# Activate on Windows PowerShell
+.\<myvenv>\Scripts\activate
+
+# Activate on Linux/Mac bash
+source <myvenv>/bin/activate
+```
+
+### Screen Session Management
+
+For long-running processes, use screen sessions to keep them running even if you disconnect:
+
+```bash
+# Create a new screen session with a name
+screen -S mysession
+
+# List all running screen sessions
+screen -ls
+
+# Reattach to a running session
+screen -r mysession
+
+# If only one screen running, you can just do:
+screen -r
+
+# If the session is "detached but not dead" and you want to force reattach:
+screen -D -r mysession
+```
+
+**Screen Commands:**
+- `Ctrl+A` then `D`: Detach from current session
+- `Ctrl+A` then `C`: Create new window
+- `Ctrl+A` then `N`: Next window
+- `Ctrl+A` then `P`: Previous window
+- `Ctrl+A` then `K`: Kill current session
 
 ## 🛠️ Usage
 
@@ -173,6 +229,51 @@ nnUNetv2_predict \
     -f 0
 ```
 
+### 4. PCR Prediction
+
+#### Basic PCR Prediction
+
+```python
+from src.pcr_prediction import predict_pcr
+
+# Predict PCR from segmented images
+prediction = predict_pcr(
+    segmented_images_dir="/path/to/segmented/images",
+    model_path="/path/to/trained/model.pkl"
+)
+```
+
+#### Command Line Usage
+
+```bash
+# Predict PCR from segmented images
+python pcr_prediction_use_case.py /path/to/segmented/images /path/to/model /path/to/output
+```
+
+### 5. Complete Pipeline
+
+#### Running the Complete Pipeline
+
+The complete pipeline processes DICOM images all the way to PCR prediction:
+
+```bash
+# Run complete pipeline from DICOM to PCR
+python complete_pipeline.py \
+    --input-dicom /path/to/dicom/root \
+    --output-root /path/to/output \
+    --dataset-id 1 \
+    --nnunet-model-path /path/to/nnunet/model \
+    --pcr-model-path /path/to/pcr/model
+```
+
+#### Pipeline Steps
+
+1. **DICOM to NIfTI**: Convert DICOM files to NIfTI format
+2. **IRM to nnUNet**: Prepare MRI data for nnUNet segmentation
+3. **nnUNet Inference**: Perform tumor segmentation
+4. **PCR Prediction**: Predict pathological complete response
+5. **Results**: Generate comprehensive output with predictions and visualizations
+
 ## 📁 Input/Output Structures
 
 ### DICOM to NIfTI Input Structure
@@ -233,6 +334,58 @@ nnunet_root/
                 └── fold_0/
 ```
 
+### nnUNet Inference Input Structure
+
+```
+imagesTs/
+├── subject_001_0000.nii.gz
+├── subject_002_0000.nii.gz
+└── ...
+```
+
+### nnUNet Inference Output Structure
+
+```
+predictions/
+├── subject_001.nii.gz          # Segmentation mask
+├── subject_002.nii.gz          # Segmentation mask
+└── ...
+```
+
+### PCR Prediction Input Structure
+
+```
+segmented_images/
+├── subject_001/
+│   ├── original.nii.gz         # Original MRI image
+│   ├── segmentation.nii.gz     # Tumor segmentation mask
+│   └── metadata.json           # Patient metadata
+├── subject_002/
+│   ├── original.nii.gz
+│   ├── segmentation.nii.gz
+│   └── metadata.json
+└── ...
+```
+
+### Complete Pipeline Output Structure
+
+```
+pipeline_output/
+├── intermediate_results/
+│   ├── nifti_conversions/      # DICOM to NIfTI outputs
+│   ├── nnunet_prepared/        # nnUNet format data
+│   └── segmentations/          # nnUNet inference results
+├── final_results/
+│   ├── pcr_predictions.csv     # PCR predictions for all subjects
+│   ├── confidence_scores.csv   # Prediction confidence scores
+│   └── visualizations/         # Generated plots and images
+├── logs/
+│   ├── conversion.log          # Conversion process logs
+│   ├── inference.log           # nnUNet inference logs
+│   └── prediction.log          # PCR prediction logs
+└── summary_report.html         # Comprehensive HTML report
+```
+
 ## 🔧 API Reference
 
 ### `src.dcm2nii.dicom2nifti()`
@@ -261,14 +414,45 @@ Converts IRM NIfTI files to nnUNet format with full directory structure.
 - `dataset_id` (int): Dataset number (e.g., 1 → Dataset001)
 - `irm_suffix` (str): Suffix for IRM files (default: "_IRM.nii.gz")
 
-### `dcm2nii_use_case.process_subjects()`
+### `src.nnunet_inference.run_inference()`
 
-Processes multiple subjects with batch DICOM to NIfTI conversion.
+Runs nnUNet inference on prepared test images.
 
 **Parameters:**
-- `input_root` (str): Root input directory containing subject folders
-- `output_root` (str): Directory where converted NIfTI files will be saved
-- `modalities` (tuple): List of modality subfolders to check and convert
+- `dataset_id` (int): Dataset ID for nnUNet
+- `input_dir` (str): Directory containing test images
+- `output_dir` (str): Directory for segmentation outputs
+- `config` (str): nnUNet configuration (default: "3d_fullres")
+- `fold` (int): Fold number (default: 0)
+
+**Returns:**
+- `dict`: Inference results and metadata
+
+### `src.pcr_prediction.predict_pcr()`
+
+Predicts PCR from segmented tumor images.
+
+**Parameters:**
+- `segmented_images_dir` (str): Directory containing segmented images
+- `model_path` (str): Path to trained PCR prediction model
+- `output_dir` (str): Directory for prediction outputs
+
+**Returns:**
+- `dict`: PCR predictions and confidence scores
+
+### `complete_pipeline.run_complete_pipeline()`
+
+Runs the complete pipeline from DICOM to PCR prediction.
+
+**Parameters:**
+- `input_dicom` (str): Root directory with DICOM data
+- `output_root` (str): Root directory for all outputs
+- `dataset_id` (int): nnUNet dataset ID
+- `nnunet_model_path` (str): Path to nnUNet model
+- `pcr_model_path` (str): Path to PCR prediction model
+
+**Returns:**
+- `dict`: Complete pipeline results and summary
 
 ## 🧪 Testing
 
@@ -284,6 +468,107 @@ python dcm2nii_use_case.py ./test_data/input ./test_data/output
 
 # Test IRM to nnUNet conversion
 python irm2nnunet_use_case.py ./test_data/output ./test_data/nnunet --dataset-id 1
+
+# Test nnUNet inference
+python nnunet_inference_use_case.py 1 ./test_data/nnunet/imagesTs ./test_data/predictions
+
+# Test PCR prediction
+python pcr_prediction_use_case.py ./test_data/predictions ./test_data/pcr_model ./test_data/pcr_output
+
+# Test complete pipeline
+python complete_pipeline.py \
+    --input-dicom ./test_data/input \
+    --output-root ./test_data/pipeline_output \
+    --dataset-id 1 \
+    --nnunet-model-path ./test_data/nnunet_model \
+    --pcr-model-path ./test_data/pcr_model
+```
+
+### Testing with Sample Data
+
+```bash
+# Create test environment
+python3 -m venv test_env
+source test_env/bin/activate  # On Windows: .\test_env\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run tests
+python test_conversion.py
+```
+
+## 💻 Console Usage Examples
+
+### Complete Pipeline in Console
+
+Here's how to run the complete pipeline from DICOM to PCR prediction in the console:
+
+```bash
+# 1. Create and activate environment
+python3 -m venv breast_cancer_env
+source breast_cancer_env/bin/activate  # On Windows: .\breast_cancer_env\Scripts\activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+pip install nnunetv2
+
+# 3. Set up nnUNet environment variables
+export nnUNet_raw=~/nnUNet_raw
+export nnUNet_preprocessed=~/nnUNet_preprocessed
+export nnUNet_results=~/nnUNet_results
+
+# 4. Run complete pipeline
+python complete_pipeline.py \
+    --input-dicom /path/to/dicom/images \
+    --output-root /path/to/results \
+    --dataset-id 1 \
+    --nnunet-model-path /path/to/nnunet/model \
+    --pcr-model-path /path/to/pcr/model
+```
+
+### Using Screen for Long-Running Processes
+
+```bash
+# Create a screen session for the pipeline
+screen -S breast_cancer_pipeline
+
+# Run the pipeline (it will continue even if you disconnect)
+python complete_pipeline.py --input-dicom /path/to/dicom --output-root /path/to/results
+
+# Detach from screen: Ctrl+A, then D
+# Reattach later: screen -r breast_cancer_pipeline
+```
+
+### Step-by-Step Processing
+
+```bash
+# Step 1: DICOM to NIfTI
+python dcm2nii_use_case.py /path/to/dicom /path/to/nifti
+
+# Step 2: Prepare for nnUNet
+python irm2nnunet_use_case.py /path/to/nifti /path/to/nnunet --dataset-id 1
+
+# Step 3: Run nnUNet inference
+nnUNetv2_predict -d 1 -i /path/to/nnunet/imagesTs -o /path/to/segments -c 3d_fullres -f 0
+
+# Step 4: PCR prediction
+python pcr_prediction_use_case.py /path/to/segments /path/to/pcr_model /path/to/predictions
+```
+
+### Batch Processing Multiple Datasets
+
+```bash
+# Process multiple datasets
+for dataset_id in 1 2 3; do
+    echo "Processing Dataset00${dataset_id}"
+    python complete_pipeline.py \
+        --input-dicom /path/to/dicom/dataset${dataset_id} \
+        --output-root /path/to/results/dataset${dataset_id} \
+        --dataset-id ${dataset_id} \
+        --nnunet-model-path /path/to/nnunet/model \
+        --pcr-model-path /path/to/pcr/model
+done
 ```
 
 ## 🤝 Contributing
