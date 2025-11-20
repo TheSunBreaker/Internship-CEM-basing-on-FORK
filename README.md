@@ -45,19 +45,6 @@ BREAST-CANCER-RADIOMICS/
 - Python 3.7 or higher
 - pip package manager
 
-### Dependencies
-
-Install the required packages:
-
-```bash
-pip install SimpleITK
-```
-
-Or install from the requirements file:
-
-```bash
-pip install -r requirements.txt
-```
 
 ## 📦 Dependencies
 
@@ -72,6 +59,12 @@ The main dependencies for this project are:
 - **pandas**: For data manipulation
 - **matplotlib**: For visualization
 - **seaborn**: For statistical visualization
+
+Install from the requirements file:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## 🌐 Environment Setup
 
@@ -139,16 +132,37 @@ python src/dcm2nii.py /path/to/dicom/folder /output/directory --prefix subject_0
 python dcm2nii_use_case.py /path/to/input/root /path/to/output/root
 ```
 
-#### Advanced Usage with Custom Modalities
+#### DICOM to NIfTI Input Structure
 
-```bash
-# Process specific modalities only
-python dcm2nii_use_case.py /input/root /output/root --modalities IRM TEP
+```
+input_root/
+├── subject_001/
+│   ├── IRM/          # MRI DICOM files
+│   ├── TEP/          # PET DICOM files
+│   └── TDM/          # CT DICOM files
+├── subject_002/
+│   ├── IRM/
+│   └── TEP/
+└── ...
 ```
 
-### 2. IRM to nnUNet Conversion
+#### DICOM to NIfTI Output Structure
 
-#### Basic IRM to nnUNet Conversion
+```
+output_root/
+├── subject_001/
+│   ├── subject_001_IRM.nii.gz
+│   ├── subject_001_TEP.nii.gz
+│   └── subject_001_TDM.nii.gz
+├── subject_002/
+│   ├── subject_002_IRM.nii.gz
+│   └── subject_002_TEP.nii.gz
+└── ...
+```
+
+### 2. IRM to nnUNet format Conversion
+
+#### Basic IRM to nnUNet input format conversion
 
 ```python
 from src.irm2nnunet import extract_irm_to_nnunet_flat
@@ -167,6 +181,36 @@ extract_irm_to_nnunet_flat(
 ```bash
 # Convert IRM files to nnUNet format
 python irm2nnunet_use_case.py /path/to/subjects /path/to/nnunet --dataset-id 1
+```
+
+#### IRM to nnUNet Input structure
+
+```
+subjects_dir/
+├── subject_001/
+│   └── subject_001_IRM.nii.gz
+├── subject_002/
+│   └── subject_002_IRM.nii.gz
+└── ...
+```
+
+#### IRM to nnUNet Output structure
+
+```
+nnunet_root/
+└── nnunetv2/
+    ├── nnUNet_raw/
+    │   └── Dataset001/
+    │       ├── imagesTr/
+    │       │   ├── subject_001_0000.nii.gz
+    │       │   └── subject_002_0000.nii.gz
+    │       ├── labelsTr/
+    │       └── imagesTs_pred3dfullres/
+    ├── nnUNet_preprocessed/
+    └── nnUNet_results/
+        └── Dataset001/
+            └── nnUNetTrainer__nnUNetPlans__3d_fullres/
+                └── fold_0/
 ```
 
 ### 3. nnUNet Inference
@@ -229,6 +273,25 @@ nnUNetv2_predict \
     -f 0
 ```
 
+
+### nnUNet Inference Input Structure
+
+```
+imagesTs/
+├── subject_001_0000.nii.gz
+├── subject_002_0000.nii.gz
+└── ...
+```
+
+### nnUNet Inference Output Structure
+
+```
+predictions/
+├── subject_001.nii.gz          # Segmentation mask
+├── subject_002.nii.gz          # Segmentation mask
+└── ...
+```
+
 ### 4. PCR Prediction
 
 #### Basic PCR Prediction
@@ -248,6 +311,34 @@ prediction = predict_pcr(
 ```bash
 # Predict PCR from segmented images
 python pcr_prediction_use_case.py /path/to/segmented/images /path/to/model /path/to/output
+```
+
+### PCR Prediction Input Structure
+
+```
+segmented_images/
+├── subject_001/
+│   ├── original.nii.gz         # Original MRI image
+│   ├── segmentation.nii.gz     # Tumor segmentation mask
+│   └── metadata.json           # Patient metadata
+├── subject_002/
+│   ├── original.nii.gz
+│   ├── segmentation.nii.gz
+│   └── metadata.json
+└── ...
+```### PCR Prediction Input Structure
+
+```
+segmented_images/
+├── subject_001/
+│   ├── original.nii.gz         # Original MRI image
+│   ├── segmentation.nii.gz     # Tumor segmentation mask
+│   └── metadata.json           # Patient metadata
+├── subject_002/
+│   ├── original.nii.gz
+│   ├── segmentation.nii.gz
+│   └── metadata.json
+└── ...
 ```
 
 ### 5. Complete Pipeline
@@ -274,97 +365,32 @@ python complete_pipeline.py \
 4. **PCR Prediction**: Predict pathological complete response
 5. **Results**: Generate comprehensive output with predictions and visualizations
 
-## 📁 Input/Output Structures
 
-### DICOM to NIfTI Input Structure
+#### Complete Pipeline in Console
 
-```
-input_root/
-├── subject_001/
-│   ├── IRM/          # MRI DICOM files
-│   ├── TEP/          # PET DICOM files
-│   └── TDM/          # CT DICOM files
-├── subject_002/
-│   ├── IRM/
-│   └── TEP/
-└── ...
-```
+Here's how to run the complete pipeline from DICOM to PCR prediction in the console:
 
-### DICOM to NIfTI Output Structure
+```bash
+# 1. Create and activate environment
+python3 -m venv breast_cancer_env
+source breast_cancer_env/bin/activate  # On Windows: .\breast_cancer_env\Scripts\activate
 
-```
-output_root/
-├── subject_001/
-│   ├── subject_001_IRM.nii.gz
-│   ├── subject_001_TEP.nii.gz
-│   └── subject_001_TDM.nii.gz
-├── subject_002/
-│   ├── subject_002_IRM.nii.gz
-│   └── subject_002_TEP.nii.gz
-└── ...
-```
+# 2. Install dependencies
+pip install -r requirements.txt
+pip install nnunetv2
 
-### IRM to nnUNet Input Structure
+# 3. Set up nnUNet environment variables
+export nnUNet_raw=~/nnUNet_raw
+export nnUNet_preprocessed=~/nnUNet_preprocessed
+export nnUNet_results=~/nnUNet_results
 
-```
-subjects_dir/
-├── subject_001/
-│   └── subject_001_IRM.nii.gz
-├── subject_002/
-│   └── subject_002_IRM.nii.gz
-└── ...
-```
-
-### IRM to nnUNet Output Structure
-
-```
-nnunet_root/
-└── nnunetv2/
-    ├── nnUNet_raw/
-    │   └── Dataset001/
-    │       ├── imagesTr/
-    │       │   ├── subject_001_0000.nii.gz
-    │       │   └── subject_002_0000.nii.gz
-    │       ├── labelsTr/
-    │       └── imagesTs_pred3dfullres/
-    ├── nnUNet_preprocessed/
-    └── nnUNet_results/
-        └── Dataset001/
-            └── nnUNetTrainer__nnUNetPlans__3d_fullres/
-                └── fold_0/
-```
-
-### nnUNet Inference Input Structure
-
-```
-imagesTs/
-├── subject_001_0000.nii.gz
-├── subject_002_0000.nii.gz
-└── ...
-```
-
-### nnUNet Inference Output Structure
-
-```
-predictions/
-├── subject_001.nii.gz          # Segmentation mask
-├── subject_002.nii.gz          # Segmentation mask
-└── ...
-```
-
-### PCR Prediction Input Structure
-
-```
-segmented_images/
-├── subject_001/
-│   ├── original.nii.gz         # Original MRI image
-│   ├── segmentation.nii.gz     # Tumor segmentation mask
-│   └── metadata.json           # Patient metadata
-├── subject_002/
-│   ├── original.nii.gz
-│   ├── segmentation.nii.gz
-│   └── metadata.json
-└── ...
+# 4. Run complete pipeline
+python complete_pipeline.py \
+    --input-dicom /path/to/dicom/images \
+    --output-root /path/to/results \
+    --dataset-id 1 \
+    --nnunet-model-path /path/to/nnunet/model \
+    --pcr-model-path /path/to/pcr/model
 ```
 
 ### Complete Pipeline Output Structure
@@ -385,74 +411,6 @@ pipeline_output/
 │   └── prediction.log          # PCR prediction logs
 └── summary_report.html         # Comprehensive HTML report
 ```
-
-## 🔧 API Reference
-
-### `src.dcm2nii.dicom2nifti()`
-
-Converts a DICOM series to NIfTI format.
-
-**Parameters:**
-- `dicom_folder` (str): Path to the folder containing DICOM files
-- `output_dir` (str): Directory where the NIfTI file will be saved
-- `prefix` (str, optional): Prefix for the output filename (default: "output")
-
-**Returns:**
-- `str`: Path to the saved NIfTI file
-
-**Raises:**
-- `FileNotFoundError`: If the DICOM folder doesn't exist
-- `RuntimeError`: If no DICOM series is found in the folder
-
-### `src.irm2nnunet.extract_irm_to_nnunet_flat()`
-
-Converts IRM NIfTI files to nnUNet format with full directory structure.
-
-**Parameters:**
-- `subjects_dir` (str): Root directory with subject folders
-- `nnunet_root` (str): Base directory where nnUNet structure will be created
-- `dataset_id` (int): Dataset number (e.g., 1 → Dataset001)
-- `irm_suffix` (str): Suffix for IRM files (default: "_IRM.nii.gz")
-
-### `src.nnunet_inference.run_inference()`
-
-Runs nnUNet inference on prepared test images.
-
-**Parameters:**
-- `dataset_id` (int): Dataset ID for nnUNet
-- `input_dir` (str): Directory containing test images
-- `output_dir` (str): Directory for segmentation outputs
-- `config` (str): nnUNet configuration (default: "3d_fullres")
-- `fold` (int): Fold number (default: 0)
-
-**Returns:**
-- `dict`: Inference results and metadata
-
-### `src.pcr_prediction.predict_pcr()`
-
-Predicts PCR from segmented tumor images.
-
-**Parameters:**
-- `segmented_images_dir` (str): Directory containing segmented images
-- `model_path` (str): Path to trained PCR prediction model
-- `output_dir` (str): Directory for prediction outputs
-
-**Returns:**
-- `dict`: PCR predictions and confidence scores
-
-### `complete_pipeline.run_complete_pipeline()`
-
-Runs the complete pipeline from DICOM to PCR prediction.
-
-**Parameters:**
-- `input_dicom` (str): Root directory with DICOM data
-- `output_root` (str): Root directory for all outputs
-- `dataset_id` (int): nnUNet dataset ID
-- `nnunet_model_path` (str): Path to nnUNet model
-- `pcr_model_path` (str): Path to PCR prediction model
-
-**Returns:**
-- `dict`: Complete pipeline results and summary
 
 ## 🧪 Testing
 
@@ -498,47 +456,6 @@ pip install -r requirements.txt
 python test_conversion.py
 ```
 
-## 💻 Console Usage Examples
-
-### Complete Pipeline in Console
-
-Here's how to run the complete pipeline from DICOM to PCR prediction in the console:
-
-```bash
-# 1. Create and activate environment
-python3 -m venv breast_cancer_env
-source breast_cancer_env/bin/activate  # On Windows: .\breast_cancer_env\Scripts\activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-pip install nnunetv2
-
-# 3. Set up nnUNet environment variables
-export nnUNet_raw=~/nnUNet_raw
-export nnUNet_preprocessed=~/nnUNet_preprocessed
-export nnUNet_results=~/nnUNet_results
-
-# 4. Run complete pipeline
-python complete_pipeline.py \
-    --input-dicom /path/to/dicom/images \
-    --output-root /path/to/results \
-    --dataset-id 1 \
-    --nnunet-model-path /path/to/nnunet/model \
-    --pcr-model-path /path/to/pcr/model
-```
-
-### Using Screen for Long-Running Processes
-
-```bash
-# Create a screen session for the pipeline
-screen -S breast_cancer_pipeline
-
-# Run the pipeline (it will continue even if you disconnect)
-python complete_pipeline.py --input-dicom /path/to/dicom --output-root /path/to/results
-
-# Detach from screen: Ctrl+A, then D
-# Reattach later: screen -r breast_cancer_pipeline
-```
 
 ### Step-by-Step Processing
 
@@ -585,7 +502,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👥 Authors
 
-- **esalasvilla** - *Initial work* - [GitHub Profile]
+- **esalasvilla** - *Initial work* - [elianasv]
 
 ## 🙏 Acknowledgments
 
@@ -602,13 +519,13 @@ If you use this code in your research, please cite:
   author = {esalasvilla},
   title = {Breast Cancer Radiomics Project},
   year = {2025},
-  url = {https://github.com/your-username/breast-cancer-radiomics}
+  url = {https://github.com/elianasv/BREAST-CANCER-RADIOMICS}
 }
 ```
 
 ## 📞 Support
 
-For questions and support, please open an issue on GitHub or contact the maintainers.
+For questions and support, please open an issue on GitHub or contact elianasv1400@gmail.com.
 
 ---
 
