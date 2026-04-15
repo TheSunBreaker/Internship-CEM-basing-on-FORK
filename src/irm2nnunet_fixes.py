@@ -9,11 +9,11 @@ def extract_dce_to_nnunet_flat(
     dataset_id=1,           # Identifiant numérique du dataset (ex: 1 pour Dataset001)
     num_channels=4,         # Nombre de séquences IRM par patient (ex: T1, T2, etc.)
     channel_prefix="DCE",   # Préfixe pour nommer les canaux dans le JSON
-    label_name="lesion",    # Nom de la structure à segmenter
-    use_last_file_as_mask=False  # Si True, ignore les noms et prend le dernier fichier trié comme masque
+    label_name="lesion"     # Nom de la structure à segmenter
 ):
     """
     Transforme une structure de fichiers IRM brute en une structure compatible nnU-Net V2.
+    Prérequis de la structure d'entrée : Chaque dossier patient doit contenir un sous-dossier 'imgs' et un sous-dossier 'mask'.
     nnU-Net exige un formatage strict :
     - Images : PatientID_XXXX.nii.gz (XXXX = index du canal, ex: 0000, 0001)
     - Labels : PatientID.nii.gz
@@ -49,45 +49,36 @@ def extract_dce_to_nnunet_flat(
 
     for subj in subjects:
         subj_path = os.path.join(subjects_dir, subj)
+        
+        # NOUVEAU : Définition des chemins vers les sous-dossiers spécifiques
+        imgs_dir = os.path.join(subj_path, "imgs")
+        mask_dir = os.path.join(subj_path, "mask")
 
-        # Récupère tous les fichiers .nii.gz dans le dossier du patient, triés par nom
-        fichiers = sorted(glob.glob(os.path.join(subj_path, "*.nii.gz")))
-
-        # Sécurité : si le dossier est vide, on passe au suivant
-        if len(fichiers) == 0:
-            print(f" {subj}: aucun fichier trouvé")
+        # NOUVEAU : Sécurité - Vérifie que la structure attendue est bien présente
+        if not os.path.exists(imgs_dir) or not os.path.exists(mask_dir):
+            print(f" {subj}: sous-dossiers 'imgs' ou 'mask' manquants. Patient ignoré.")
             continue
 
-        # --- ÉTAPE 3 : LOGIQUE DE TRI (IMAGES VS MASQUES) ---
+        # --- ÉTAPE 3 : LOGIQUE DE TRI BASEE SUR LES DOSSIERS ---
 
-        # MODE 1 : On considère que le masque est le dernier fichier de la liste triée
-        if use_last_file_as_mask:
-            # Vérifie qu'on a assez de fichiers (N canaux + 1 masque)
-            if len(fichiers) < num_channels + 1:
-                print(f" {subj}: pas assez de fichiers pour {num_channels} canaux + masque")
-                continue
+        # NOUVEAU : On récupère les images uniquement dans le dossier "imgs", triées par nom
+        fichiers_images = sorted(glob.glob(os.path.join(imgs_dir, "*.nii.gz")))
+        
+        # NOUVEAU : On récupère les masques uniquement dans le dossier "mask"
+        fichiers_masques = sorted(glob.glob(os.path.join(mask_dir, "*.nii.gz")))
 
-            fichiers_images = fichiers[:num_channels] # Les N premiers sont les images
-            fichiers_masques = [fichiers[-1]]          # Le dernier est le masque
+        # Vérifications de sécurité pour les images
+        if len(fichiers_images) < num_channels:
+            print(f" {subj}: pas assez de canaux d'images trouvés dans 'imgs' (trouvé {len(fichiers_images)}, attendu {num_channels})")
+            continue
 
-        # MODE 2 : Détection par mots-clés (automatique)
-        else:
-            # On cherche les fichiers dont le nom contient "mask" ou "seg" (insensible à la casse)
-            fichiers_masques = [
-                f for f in fichiers
-                if "mask" in f.lower() or "seg" in f.lower()
-            ]
-            # Les images sont tous les fichiers qui ne sont PAS des masques
-            fichiers_images = [f for f in fichiers if f not in fichiers_masques]
-
-            # Vérifications de sécurité
-            if len(fichiers_images) < num_channels:
-                print(f" {subj}: pas assez de canaux d'images trouvés")
-                continue
-
-            if len(fichiers_masques) == 0:
-                print(f" {subj}: pas de masque trouvé via mots-clés")
-                continue
+        # Vérifications de sécurité pour le masque
+        if len(fichiers_masques) == 0:
+            print(f" {subj}: aucun fichier de masque trouvé dans le sous-dossier 'mask'")
+            continue
+        elif len(fichiers_masques) > 1:
+            # Avertissement au cas où plusieurs masques s'y trouveraient, on prendra le premier
+            print(f" {subj}: attention, plusieurs masques trouvés dans 'mask'. Seul le premier sera utilisé.")
 
         print(f" Traitement de : {subj}")
 
