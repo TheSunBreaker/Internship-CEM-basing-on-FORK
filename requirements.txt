@@ -67,3 +67,10 @@ typing_extensions==4.14.1
 tzdata==2025.2
 wcwidth==0.2.13
 xlsxwriter==3.2.5
+
+# added by P-A
+TotalSegmentator
+synapseclient
+synapseutils
+urllib3
+nnunetv2
