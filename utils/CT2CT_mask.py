@@ -2,13 +2,16 @@ import os
 from pathlib import Path
 from totalsegmentator.python_api import totalsegmentator
 
-def segment_breasts_batch(input_folder: str, output_folder: str):
+def segment_breasts_batch(input_folder: str, output_folder: str, CT_suffix = "_TDM.nii.gz"):
     input_path = Path(input_folder)
     output_path = Path(output_folder)
     output_path.mkdir(parents=True, exist_ok=True)
+    """
+    input_folder doit contenir des images CT suffixées par un certain suffixe CT_suffix 
+    """
 
     # On récupère tous les fichiers scanner (CT) .nii.gz
-    ct_files = list(input_path.glob("*_TDM.nii.gz")) # suffixe à adapter si besoin
+    ct_files = list(input_path.glob(f"*{CT_suffix}")) # suffixe à adapter si besoin
 
     print(f"--- Début du traitement de {len(ct_files)} patients ---")
 
@@ -35,7 +38,7 @@ def segment_breasts_batch(input_folder: str, output_folder: str):
             print(f"❌ Erreur pour le patient {patient_id} : {e}")
 
 if __name__ == "__main__":
-    # A remplace par les vrais chemins
+    # A remplacer par les vrais chemins
     MY_INPUT_CT = "./data/images_ct"
     MY_OUTPUT_MASKS = "./data/breast_masks"
     
