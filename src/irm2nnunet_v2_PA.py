@@ -2,7 +2,7 @@ import os
 import shutil  # Manipulation de fichiers de haut niveau (copie de fichiers)
 import glob    # Recherche de fichiers avec des motifs (wildcards comme *.nii.gz)
 import json    # Lecture et écriture de fichiers JSON (requis par nnU-Net)
-from utils.normalize_mris_phases.py import normalize_dce_patient
+from utils.normalize_mris_phases import normalize_dce_patient
 
 def extract_dce_to_nnunet_flat(
     subjects_dir,           # Dossier source contenant les dossiers patients
