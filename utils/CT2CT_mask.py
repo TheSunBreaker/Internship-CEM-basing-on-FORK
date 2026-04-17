@@ -33,9 +33,9 @@ def segment_breasts_batch(input_folder: str, output_folder: str, CT_suffix = "_T
                 roi_subset=["breast_female_left", "breast_female_right"],
                 ml=True # Utilise le Deep Learning
             )
-            print(f"✅ Masque généré : {output_mask}")
+            print(f"Masque généré : {output_mask}")
         except Exception as e:
-            print(f"❌ Erreur pour le patient {patient_id} : {e}")
+            print(f"Erreur pour le patient {patient_id} : {e}")
 
 if __name__ == "__main__":
     # A remplacer par les vrais chemins
