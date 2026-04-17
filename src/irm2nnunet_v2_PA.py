@@ -125,8 +125,8 @@ def extract_dce_to_nnunet_flat(
 
     # --- ÉTAPE 6 : RÉSUMÉ ---
     print("\n" + "="*30)
-    print(" ✅ dataset.json créé !")
-    print(f" 📊 Patients valides traités : {valid_subjects}")
-    print(f" 📂 Emplacement : {nnunet_raw}")
+    print("dataset.json créé !")
+    print(f"Patients valides traités : {valid_subjects}")
+    print(f"Emplacement : {nnunet_raw}")
     print("="*30)
     print(" Conversion terminée.")
