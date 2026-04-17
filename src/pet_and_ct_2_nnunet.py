@@ -42,7 +42,7 @@ def prepare_pet_ct_for_nnunet(
             print(f"❌ {subj} ignoré : PET, CT ou Masque introuvable.")
             continue
 
-        print(f"🔄 Traitement de : {subj}")
+        print(f"Traitement de : {subj}")
 
         try:
             # --- 3. CHARGEMENT ET RÉ-ÉCHANTILLONNAGE (SIMPLEITK) ---
@@ -76,7 +76,7 @@ def prepare_pet_ct_for_nnunet(
             valid_subjects += 1
 
         except Exception as e:
-            print(f"❌ Erreur lors du traitement de {subj} : {e}")
+            print(f"Erreur lors du traitement de {subj} : {e}")
 
     # --- 5. GÉNÉRATION DU JSON ---
     dataset_json = {
@@ -96,9 +96,9 @@ def prepare_pet_ct_for_nnunet(
         json.dump(dataset_json, f, indent=4)
 
     print("\n" + "="*40)
-    print("✅ Structure nnU-Net V2 générée avec succès !")
-    print(f"📊 Patients valides traités : {valid_subjects}")
-    print(f"📂 Emplacement : {nnunet_raw}")
+    print("Structure nnU-Net V2 générée avec succès !")
+    print(f"Patients valides traités : {valid_subjects}")
+    print(f"Emplacement : {nnunet_raw}")
     print("="*40)
 
 if __name__ == "__main__":
