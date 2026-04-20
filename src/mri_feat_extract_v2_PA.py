@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-irm_radiomics_multiphase.py
-Reusable radiomics extractor (V2 - Multiphase Edition):
-- [MODIFICATION V2] Traite une structure propre : dossier_patient/imgs/ (plusieurs phases) et dossier_patient/mask/ (1 masque)
-- [MODIFICATION V2] Extrait les features PyRadiomics pour CHAQUE phase en utilisant le même masque.
-- [MODIFICATION V2] Ajoute une colonne 'phase_id' dans le CSV/Excel de sortie.
+Extracteur de radiomiques adapté pour lire les données depuis la structure nnU-Net V2.
+- Lit les masques uniques dans labelsTr/ (ex: Patient01.nii.gz)
+- Lit les phases normalisées globales dans imagesTr/ (ex: Patient01_0000.nii.gz)
+- Désactive la normalisation locale de PyRadiomics pour préserver la cinétique du produit de contraste.
 """
+
 
 import os
 import re
@@ -22,51 +22,42 @@ import SimpleITK as sitk
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
+# On importe PyRadiomics mais on réduit sa verbosité pour ne pas polluer le terminal
 from radiomics import featureextractor, logger as pyr_logger
-pyr_logger.setLevel("WARNING")  # only warnings/errors from PyRadiomics
+pyr_logger.setLevel("WARNING") 
 
 
 # --------------------------- Discovery utils ---------------------------
 
-# [MODIFICATION V2] Toute cette section a été repensée pour utiliser la nouvelle structure
-def find_multiphase_tasks(subjects_dir: Path) -> List[Dict]:
+def find_multiphase_tasks_nnunet(imagesTr_dir: Path, labelsTr_dir: Path) -> List[Dict]:
     """
-    Parcourt le dossier principal contenant les patients.
-    Pour chaque patient, associe chaque image du dossier 'imgs' au masque du dossier 'mask'.
-    Retourne une liste de tâches pour le traitement en parallèle.
+    Scanne les dossiers de nnU-Net pour appairer chaque canal (phase) d'un patient à son masque.
     """
     tasks = []
     
-    # Parcourir chaque dossier patient
-    for subj_path in [d for d in subjects_dir.iterdir() if d.is_dir()]:
-        subject_id = subj_path.name
-        imgs_dir = subj_path / "imgs"
-        mask_dir = subj_path / "mask"
+    # On se base d'abord sur les masques car 1 fichier masque = 1 patient garanti.
+    # Les fichiers dans labelsTr s'appellent PatientID.nii.gz
+    for mask_path in labelsTr_dir.glob("*.nii.gz"):
         
-        if not imgs_dir.exists() or not mask_dir.exists():
-            print(f"Skipping {subject_id}: 'imgs' ou 'mask' manquant.")
-            continue
-            
-        # Trouver le masque unique (on prend le premier .nii.gz trouvé)
-        mask_files = list(mask_dir.glob("*.nii.gz"))
-        if not mask_files:
-            print(f"Skipping {subject_id}: aucun masque trouvé dans {mask_dir}")
-            continue
-        mask_path = mask_files[0]
+        # On isole l'identifiant du patient en retirant l'extension
+        subject_id = mask_path.name.replace(".nii.gz", "")
         
-        # Trouver toutes les phases (images)
-        img_files = sorted(list(imgs_dir.glob("*.nii.gz")))
+        # Maintenant qu'on a l'ID, on cherche toutes ses phases dans imagesTr.
+        # Format nnU-Net : PatientID_0000.nii.gz, PatientID_0001.nii.gz, etc.
+        img_files = sorted(list(imagesTr_dir.glob(f"{subject_id}_*.nii.gz")))
+        
+        # Cas critique : on a un masque mais pas d'images correspondantes (problème d'export ?)
         if not img_files:
-            print(f"Skipping {subject_id}: aucune image trouvée dans {imgs_dir}")
+            print(f"[WARN] Skipped {subject_id}: masque trouvé mais aucune image dans {imagesTr_dir}")
             continue
             
-        # Créer une tâche pour CHAQUE phase
+        # On crée une tâche de calcul indépendante pour chaque phase trouvée
         for img_path in img_files:
-            # On utilise le nom du fichier comme ID de phase (ex: "AUBCE_0000" -> "0000")
-            # Ou plus simplement, on peut prendre l'index si on veut garantir 0, 1, 2...
-            # Ici on prend le nom du fichier sans extension pour la traçabilité
-            phase_id = img_path.name.replace(".nii.gz", "") 
+            # Pour extraire l'ID de la phase, on prend la fin du fichier après le dernier underscore.
+            # Ex: "Patient01_0001.nii.gz" -> "0001"
+            phase_id = img_path.name.replace(".nii.gz", "").split("_")[-1]
             
+            # On ajoute le dictionnaire de tâche à notre liste globale
             tasks.append({
                 "subject_id": subject_id,
                 "phase_id": phase_id,
@@ -78,63 +69,92 @@ def find_multiphase_tasks(subjects_dir: Path) -> List[Dict]:
 
 
 # --------------------------- Mask helpers ---------------------------
-# [MODIFICATION V2] La fonction binary_peri_ring reste identique à la V1.
+
 def binary_peri_ring(mask_img: sitk.Image, dilation_mm: float, label: int = 1) -> sitk.Image:
     """
-    Create peritumoral ring mask = Dilate(mask==label, dilation_mm) - original(mask==label).
+    Génère un masque en forme d'anneau (donut) autour de la tumeur pour extraire les radiomiques péritumorales.
+    Formule : Tumeur_Dilatée - Tumeur_Originale
     """
-    spacing = mask_img.GetSpacing()  # (x, y, z)
+    # On récupère la taille physique des voxels pour convertir les millimètres demandés en nombre de pixels
+    spacing = mask_img.GetSpacing()
     radius_vox = [int(math.ceil(dilation_mm / s)) for s in spacing]
 
+    # On m'assure que la tumeur est bien un masque binaire net (0 fond, 1 tumeur)
     bin_mask = sitk.BinaryThreshold(mask_img, lowerThreshold=label, upperThreshold=label,
                                     insideValue=1, outsideValue=0)
 
+    # Configuration du filtre de dilatation de SimpleITK (forme de boule)
     dilate = sitk.BinaryDilateImageFilter()
     dilate.SetKernelType(sitk.sitkBall)
     dilate.SetKernelRadius(radius_vox)
     dilate.SetForegroundValue(1)
+    
+    # On applique la dilatation
     dilated = dilate.Execute(bin_mask)
 
+    # On soustrais le centre (la tumeur originale) pour ne garder que l'anneau extérieur
     peri = sitk.Subtract(dilated, bin_mask)
-    peri = sitk.Clamp(peri, lowerBound=0, upperBound=1)
+    # Sécurité : on force les valeurs entre 0 et 1 au cas où des calculs créeraient des valeurs négatives
+    peri = sitk.Clamp(peri, lowerBound=0, upperBound=1)  
+    
     return peri
 
-
+ 
 # --------------------------- PyRadiomics config ---------------------------
 
-def make_extractor(binWidth: float = 25.0, normalize: bool = True, label: int = 1) -> featureextractor.RadiomicsFeatureExtractor:
+def make_extractor(binWidth: float = 25.0, normalize: bool = False, label: int = 1) -> featureextractor.RadiomicsFeatureExtractor:
+    """
+    Initialise l'extracteur PyRadiomics avec les paramètres spécifiés.
+    CRITIQUE : normalize doit rester à False ici.
+    """
+    # On instancie l'extracteur avec la largeur de bin définie (impacte l'analyse de texture)
     ext = featureextractor.RadiomicsFeatureExtractor(
         binWidth=binWidth,
         normalize=normalize,
-        interpolator='sitkBSpline',
+        interpolator='sitkBSpline', # Interpolation qualitative si redimensionnement nécessaire
         label=label
     )
+    # On éteins tout par défaut pour avoir le contrôle absolu sur ce qui est calculé
     ext.disableAllFeatures()
+    # On active les familles de features classiques (Shape n'est pas mis ici, voir plus bas si besoin)
     ext.enableFeaturesByName(firstorder=[], glcm=[], glrlm=[], glszm=[], ngtdm=[])
+    
     return ext
 
 def execute_extract(extractor, img: sitk.Image, mask: sitk.Image, prefix: str) -> Dict[str, float]:
+    """
+    Lance le calcul PyRadiomics et formate le dictionnaire de sortie avec un préfixe (ex: tumor_ ou peri_).
+    """
+    # Sécurité SimpleITK : le masque et l'image doivent partager les mêmes métadonnées géométriques
     mask.CopyInformation(img)
+    
+    # Appel de la librairie C++ sous-jacente de PyRadiomics
     feats = extractor.execute(img, mask)
 
     out = {}
     for k, v in feats.items():
+        # On filtre les logs de diagnostic générés par PyRadiomics, on ne veux que les vraies mathématiques
         if k.startswith("diagnostics"):
             continue
+            
+        # On nettoie le nom de la feature. Ex: "original_glcm_Contrast" devient "tumor_glcm_Contrast"
         name = f"{prefix}_{re.sub(r'^original_', '', k)}"
+        
+        # Cast en float standard pour éviter les problèmes de sérialisation JSON/Pandas plus tard
         try:
             out[name] = float(v)
         except Exception:
             continue
+            
     return out
 
 
 # --------------------------- Worker ---------------------------
 
-# [MODIFICATION V2] Le worker prend maintenant phase_id en plus, et retourne subject_id ET phase_id
 def _process_one(args) -> Tuple[str, str, Dict[str, float], Optional[str]]:
     """
-    Worker: returns (subject_id, phase_id, features, error_msg)
+    Fonction unitaire exécutée par un thread (multiprocessing).
+    Traite UNE phase pour UN patient.
     """
     (task, peri_mm, save_peri_dir, extractor_params) = args
     subject_id = task["subject_id"]
@@ -143,72 +163,84 @@ def _process_one(args) -> Tuple[str, str, Dict[str, float], Optional[str]]:
     mask_path = task["mask_path"]
     
     try:
+        # Chargement en RAM de l'image et du masque
         img = sitk.ReadImage(str(img_path))
         mask_raw = sitk.ReadImage(str(mask_path))
 
-        # Align mask to image grid if needed
+        # Check de sécurité géométrique : si les grilles sont différentes, on force le ré-échantillonnage du masque
         if (img.GetSize() != mask_raw.GetSize()
             or img.GetSpacing() != mask_raw.GetSpacing()
             or img.GetOrigin()  != mask_raw.GetOrigin()
             or img.GetDirection()!= mask_raw.GetDirection()):
+            
             resampler = sitk.ResampleImageFilter()
             resampler.SetReferenceImage(img)
-            resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+            resampler.SetInterpolator(sitk.sitkNearestNeighbor) # NearestNeighbor OBLIGATOIRE pour un masque (pas de valeurs entre 0 et 1)
             resampler.SetTransform(sitk.Transform())
             mask = resampler.Execute(mask_raw)
         else:
             mask = mask_raw
 
-        # Binarize any positive label -> 1
+        # Nettoyage brutal du masque : toute valeur > 0 devient 1
         mask = sitk.BinaryThreshold(mask, lowerThreshold=1, upperThreshold=65535,
                                     insideValue=1, outsideValue=0)
 
+        # Génération du masque de la zone autour de la tumeur
         peri = binary_peri_ring(mask, dilation_mm=peri_mm, label=1)
 
-        # [MODIFICATION V2] Sauvegarde du masque péritumoral une seule fois par patient (évite les doublons)
-        if save_peri_dir is not None and phase_id.endswith("0000"): 
+        # Astuce d'optimisation : l'anneau péritumoral ne change pas selon la phase (puisque le masque tumeur est fixe).
+        # Donc on ne sauvegarde l'image Nifti de l'anneau que lors du traitement de la phase 0000 pour éviter les doublons IO.
+        if save_peri_dir is not None and phase_id == "0000": 
             save_peri_dir.mkdir(parents=True, exist_ok=True)
             sitk.WriteImage(peri, str(save_peri_dir / f"{subject_id}_peri_mask.nii.gz"))
 
+        # Construction de l'extracteur avec le dict paramétré sans normalisation
         extractor = make_extractor(**extractor_params)
+        
+        # Double extraction : sur le cœur de la tumeur, puis sur l'anneau environnant
         feats_tumor = execute_extract(extractor, img, mask, "tumor")
         feats_peri  = execute_extract(extractor, img, peri, "peri")
 
-        # [MODIFICATION V2] On injecte les ID dans le dictionnaire de résultats
+        # On initialise le dictionnaire de la ligne finale avec les identifiants
         feats = {
             "subject_id": subject_id,
             "phase_id": phase_id
         }
+        
+        # Fusion des dictionnaires tumeur et péritumeur
         feats.update(feats_tumor)
         feats.update(feats_peri)
 
         return subject_id, phase_id, feats, None
 
     except Exception as e:
+        # En cas de crash sur un patient, on renvoie l'erreur proprement pour ne pas tuer tout le batch
         return subject_id, phase_id, {}, f"{type(e).__name__}: {e}"
 
 
 # --------------------------- Orchestrator ---------------------------
 
-# [MODIFICATION V2] Les arguments de la fonction d'extraction s'adaptent (nnunet_root disparait)
-def extract_for_dataset(
-    subjects_dir: Path,     # Dossier contenant tous les patients
-    out_dir: Path,          # Dossier de sortie des résultats
+def extract_from_nnunet(
+    imagesTr_dir: Path,     # Point d'entrée des images normalisées globales
+    labelsTr_dir: Path,     # Point d'entrée des masques uniques
+    out_dir: Path,          # Dossier de sauvegarde des CSV finaux
     peri_mm: float = 5.0,
     save_peri_masks: bool = False,
-    n_jobs: Optional[int] = None,
-    extractor_params: Optional[dict] = None
+    n_jobs: Optional[int] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Extrait les caractéristiques en parallèle pour toutes les phases de tous les patients.
-    Returns: (df_results, df_errors)
+    Fonction chef d'orchestre : dispatche les tâches et agrège les résultats.
     """
-    extractor_params = extractor_params or {"binWidth": 25.0, "normalize": True, "label": 1}
-
-    # [MODIFICATION V2] On utilise notre nouvelle fonction de découverte
-    raw_tasks = find_multiphase_tasks(subjects_dir)
     
-    # On prépare les arguments pour le multiprocessing
+    # CRITIQUE : On force hardcode "normalize": False ici.
+    # Les images venant de imagesTr on DÉJÀ subi le Z-score MAMA-MIA en amont.
+    # Si on mets True, PyRadiomics va re-normaliser localement et détruire le contraste temporel.
+    extractor_params = {"binWidth": 25.0, "normalize": False, "label": 1}
+
+    # On scanne les dossiers pour créer notre roadmap de traitement
+    raw_tasks = find_multiphase_tasks_nnunet(imagesTr_dir, labelsTr_dir)
+    
+    # On package chaque tâche avec les paramètres globaux (taille de l'anneau, params extracteur, etc.)
     tasks = []
     for task in raw_tasks:
         tasks.append((
@@ -219,8 +251,9 @@ def extract_for_dataset(
         ))
 
     if not tasks:
-        raise RuntimeError("Aucune paire image/masque trouvée. Vérifiez l'arborescence (imgs/ et mask/).")
+        raise RuntimeError("Aucune tâche générée. Vérifiez les chemins imagesTr et labelsTr.")
 
+    # Si l'utilisateur ne précise pas, on prends tous les cœurs du CPU sauf 1 (pour laisser l'OS respirer)
     if n_jobs is None:
         n_jobs = max(1, cpu_count() - 1)
 
@@ -229,16 +262,17 @@ def extract_for_dataset(
     results: List[Dict] = []
     errors: List[Dict] = []
 
+    # On lance la piscine de processus (multiprocessing)
     with Pool(processes=n_jobs) as pool:
-        # [MODIFICATION V2] Récupération de phase_id dans la boucle
+        # imap_unordered est parfait ici car l'ordre de sortie importe peu, on triera le dataframe à la fin
         for subject_id, phase_id, feats, err in tqdm(pool.imap_unordered(_process_one, tasks),
-                                                     total=len(tasks), desc="Extracting Multiphase"):
+                                                     total=len(tasks), desc="Extraction Radiomique"):
             if err is None:
                 results.append(feats)
             else:
                 errors.append({"subject_id": subject_id, "phase_id": phase_id, "error": err})
 
-    # [MODIFICATION V2] On trie le DataFrame par Patient puis par Phase pour que ce soit bien lisible
+    # Conversion en DataFrame Pandas et tri multi-colonnes pour avoir un tableau propre (Patient -> Phase 0, 1, 2...)
     if results:
         df_results = pd.DataFrame(results).sort_values(by=["subject_id", "phase_id"])
     else:
@@ -246,17 +280,19 @@ def extract_for_dataset(
         
     df_errors  = pd.DataFrame(errors).sort_values(["subject_id", "phase_id"]) if errors else pd.DataFrame()
 
+    # Chemins de sauvegarde
     csv_path  = out_dir / "radiomics_results_multiphase.csv"
     xlsx_path = out_dir / "radiomics_results_multiphase.xlsx"
     meta_path = out_dir / "run_metadata.json"
 
+    # Export
     df_results.to_csv(csv_path, index=False)
     with pd.ExcelWriter(xlsx_path, engine="xlsxwriter") as writer:
         df_results.to_excel(writer, sheet_name="features", index=False)
         if not df_errors.empty:
             df_errors.to_excel(writer, sheet_name="errors", index=False)
 
-    # [MODIFICATION V2] Mise à jour des métadonnées
+    # On enregistre les métadonnées pour la reproductibilité (savoir exactement comment a tourné ce run)
     unique_patients = len(set([t["subject_id"] for t in raw_tasks]))
     meta = {
         "n_subjects_input": unique_patients,
@@ -268,8 +304,29 @@ def extract_for_dataset(
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"\nSaved:\n- {csv_path}\n- {xlsx_path}\n- {meta_path}")
+    print(f"\n--- Traitement terminé ---")
+    print(f"Fichiers sauvegardés dans : {out_dir}")
     if save_peri_masks:
-        print(f"- Peri masks in: {out_dir / 'peritumoral_masks'}")
+        print(f"Masques péritumoraux dans : {out_dir / 'peritumoral_masks'}")
 
     return df_results, df_errors
+
+
+if __name__ == "__main__":
+    # Point d'entrée du script (à modifier potentiellement)
+    
+    # 1. Les dossiers générés par le script nnU-Net
+    IMAGES_TR = Path("/chemin/vers/nnunet_raw/Dataset001_DCE/imagesTr")
+    LABELS_TR = Path("/chemin/vers/nnunet_raw/Dataset001_DCE/labelsTr")
+    
+    # 2. Le dossier on je veux sauvegarder les Excel de résultats
+    OUTPUT_DIR = Path("./results_radiomics")
+    
+    extract_from_nnunet(
+        imagesTr_dir=IMAGES_TR,
+        labelsTr_dir=LABELS_TR,
+        out_dir=OUTPUT_DIR,
+        peri_mm=5.0,           # Taille de l'anneau péritumoral en mm
+        save_peri_masks=True,  # Optionnel : sauvegarder les masques 3D de l'anneau pour vérification
+        n_jobs=4               # Nombre de processus parallèles (selon la machine)
+    )
