@@ -5,7 +5,7 @@ import shutil
 
 # =========================================================================
 # IMPORTATION DE L'OUTIL D'ALIGNEMENT
-# On suppose que ton script précédent (align_pet_ct.py) est dans le dossier "utils"
+# On suppose que le script d'allignement pet et ct est dans le dossier "utils"
 # =========================================================================
 from utils.pet_ct_mask_aliner import align_modalities_to_pet
 
