@@ -275,9 +275,6 @@ def extract_from_nnunet(
     # Conversion en DataFrame Pandas et tri multi-colonnes pour avoir un tableau propre (Patient -> Phase 0, 1, 2...)
     if results:
         df_results = pd.DataFrame(results).sort_values(by=["subject_id", "phase_id"])
-
-        # Renommer pour harmoniser avec l'autre pipeline d'extraction de radiomiques
-        df_results.rename(columns={"subject_id": "case_id"}, inplace=True)
         
     else:
         df_results = pd.DataFrame()
