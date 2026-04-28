@@ -1,6 +1,7 @@
 import os
 import pydicom
 import SimpleITK as sitk
+import shutil
 
 #TAF : On hypothèse que les séries sont rangées dans dossiers distincs donc que pas possible d'avoir 2 séries dans  dossiers différents. Mais si jamais la réalité terrain dit autrement, il faut modiff le code
 #TAF : S'assurer que phases des DCE sont dans des séries différentes
@@ -93,17 +94,23 @@ def ingest_raw_dicoms(raw_data_root: str, out_mri_root: str, out_petct_root: str
         if modality in ["PT", "CT"]:
             print(f"\n[{modality}] {description} (Patient: {patient_id})")
             
-            # Destination : Univers PETCT
-            imgs_dir = os.path.join(out_petct_root, patient_id, "imgs")
-            os.makedirs(imgs_dir, exist_ok=True)
-
             if modality == "PT":
-                out_path = os.path.join(imgs_dir, f"{patient_id}_TEP_brut.nii.gz")
-            else: # CT
-                out_path = os.path.join(imgs_dir, f"{patient_id}_TDM.nii.gz")
+                # NOUVEAU : On ne convertit pas le PET ! 
+                # On copie les DICOM bruts dans un dossier "TEP/" pour le script SUV converter et nii maker.
+                tep_dicom_dir = os.path.join(out_petct_root, patient_id, "TEP")
+                print(f" -> Copie des DICOM bruts PET vers : {tep_dicom_dir}")
                 
-            print(f" -> Conversion vers : {out_path}")
-            convert_dicom_series_to_nifti(dossier, out_path)
+                # shutil.copytree copie tout le contenu du dossier source vers la destination
+                shutil.copytree(dossier, tep_dicom_dir, dirs_exist_ok=True)
+
+            else: # CT
+                # Le CT, par contre, n'a pas besoin de calcul SUV, on le convertit directement en NIfTI.
+                imgs_dir = os.path.join(out_petct_root, patient_id, "imgs")
+                os.makedirs(imgs_dir, exist_ok=True)
+                
+                out_path = os.path.join(imgs_dir, f"{patient_id}_TDM.nii.gz")
+                print(f" -> Conversion CT vers : {out_path}")
+                convert_dicom_series_to_nifti(dossier, out_path)
 
         # --- ROUTAGE IRM (AVEC FILTRE T1/DCE) ---
         elif modality == "MR":
