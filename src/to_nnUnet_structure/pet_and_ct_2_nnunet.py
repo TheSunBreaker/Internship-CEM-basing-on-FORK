@@ -46,18 +46,29 @@ def prepare_pet_ct_for_nnunet(
         subj_path = os.path.join(subjects_dir, subj)
         
         # --- A. RECHERCHE DES FICHIERS SOURCES ---
-        # On utilise glob pour trouver les fichiers, peu importe leur nom exact
-        # (tant qu'ils contiennent SUV, TDM ou mask dans leur nom)
-        pet_files = glob.glob(os.path.join(subj_path, "*SUV.nii.gz"))
-        ct_files = glob.glob(os.path.join(subj_path, "*TDM*.nii.gz"))
-        mask_files = glob.glob(os.path.join(subj_path, "*mask*.nii.gz"))
+        # --- NOUVEAU CODE HARMONISÉ ---
+        imgs_dir = os.path.join(subj_path, "imgs")
+        mask_dir = os.path.join(subj_path, "mask")
 
+        if not os.path.exists(imgs_dir) or not os.path.exists(mask_dir):
+            print(f" [SKIP] {subj}: sous-dossiers 'imgs' ou 'mask' manquants.")
+            continue
+
+        # Recherche stricte dans le sous-dossier imgs/
+        # (Ajout de "TEP" pour qu'il attrape aussi bien notre TEP_brut que notre SUV final)
+        pet_files = glob.glob(os.path.join(imgs_dir, "*TEP*.nii.gz")) + glob.glob(os.path.join(imgs_dir, "*SUV*.nii.gz"))
+        ct_files = glob.glob(os.path.join(imgs_dir, "*TDM*.nii.gz"))
+        
+        # Recherche stricte dans le sous-dossier mask/
+        mask_files = glob.glob(os.path.join(mask_dir, "*.nii.gz"))
+
+        
         # Sécurité : Si un seul des 3 fichiers manque, nnU-Net plantera plus tard. 
         # On préfère donc ignorer complètement le patient tout de suite.
         if not pet_files or not ct_files or not mask_files:
-            print(f" [SKIP] {subj} ignoré : PET, CT ou Masque introuvable.")
+            print(f" [SKIP] {subj} ignoré : PET, CT ou Masque introuvable dans les sous-dossiers.")
             continue
-
+            
         print(f" Traitement de : {subj}")
 
         # --- B. DÉFINITION DES CHEMINS DE DESTINATION ---
