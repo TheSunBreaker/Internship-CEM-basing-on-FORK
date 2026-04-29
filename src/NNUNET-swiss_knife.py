@@ -153,6 +153,31 @@ def do_predict(dataset_id: str, config: str, fold: str, input_folder: str, outpu
 
     run_command(cmd)
 
+def do_evaluate(ground_truth_folder: str, prediction_folder: str):
+    """
+    Étape 4 : Évaluation des prédictions face à la vérité terrain.
+    Calcule le Dice, Jaccard, False Positives, False Negatives, HD95, etc.
+    """
+    print(f"--- DÉMARRAGE ÉVALUATION ---")
+    
+    gt_path = Path(ground_truth_folder)
+    pred_path = Path(prediction_folder)
+    
+    if not gt_path.exists() or not pred_path.exists():
+        print("[ERREUR] Les dossiers de vérité terrain ou de prédiction sont introuvables.")
+        sys.exit(1)
+
+    # Commande native de nnU-Net V2 pour évaluer un dossier entier
+    # -djfile permet de sauvegarder un joli JSON avec toutes les métriques par patient
+    cmd = [
+        "nnUNetv2_evaluate_folder",
+        "-g", str(gt_path),         # Ground Truth
+        "-p", str(pred_path),       # Predictions
+        "-djfile", str(pred_path / "evaluation_summary.json"),
+        "-pfile", str(pred_path / "evaluation_summary.csv") # Optionnel : export en CSV
+    ]
+    run_command(cmd)
+
 # ---------------------------------------------------------
 # PARSER ARGUMENTS TERMINAL
 # ---------------------------------------------------------
@@ -162,7 +187,7 @@ def main():
     parser = argparse.ArgumentParser(description="Couteau Suisse pour orchestrer nnU-Net V2 proprement")
     
     # Positional argument (obligatoire et sans tiret)
-    parser.add_argument("action", choices=["preprocess", "train", "predict"], 
+    parser.add_argument("action", choices=["preprocess", "train", "predict", "evaluate"], 
                         help="L'action principale à exécuter")
     
     # Arguments nommés (obligatoire via required=True)
@@ -183,6 +208,12 @@ def main():
     parser.add_argument("-o", "--output", type=str, 
                         help="Chemin du dossier où sauvegarder les Nifti générés (requis pour predict)")
 
+    # Arguments exclusifs à l'évaluation
+    parser.add_argument("-g", "--ground_truth", type=str, 
+                        help="Dossier contenant les masques de vérité terrain (Requis pour 'evaluate')")
+    parser.add_argument("-p", "--predictions", type=str, 
+                        help="Dossier contenant les prédictions du modèle (Requis pour 'evaluate')")
+
     # Parsing des arguments passés par l'utilisateur dans son bash
     args = parser.parse_args()
 
@@ -201,6 +232,12 @@ def main():
         if not args.input or not args.output:
             parser.error("L'action 'predict' requiert impérativement les drapeaux -i (--input) et -o (--output).")
         do_predict(args.dataset, args.config, args.fold, args.input, args.output)
+
+    elif args.action == "evaluate":
+        if not args.ground_truth or not args.predictions:
+            parser.error("L'action 'evaluate' requiert les arguments -g (--ground_truth) et -p (--predictions).")
+        do_evaluate(args.ground_truth, args.predictions)
+
 
 if __name__ == "__main__":
     main()
