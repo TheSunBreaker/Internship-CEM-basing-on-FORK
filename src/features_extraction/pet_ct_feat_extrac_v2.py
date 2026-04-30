@@ -10,7 +10,7 @@ import os, glob, math
 import numpy as np
 import pandas as pd
 import nibabel as nib
-from nibabel import processing as nibproc
+import SimpleITK as sitk
 from typing import Dict, Tuple, Optional, List
 from scipy.ndimage import label, binary_dilation, generate_binary_structure
 
@@ -41,36 +41,57 @@ def _resample_from_to(ref: nib.Nifti1Image, moving: nib.Nifti1Image, is_mask=Fal
     order = 0 if is_mask else 1
     return nibproc.resample_from_to(moving, ref, order=order)
 
-def isotropic_and_align_to_pet(
-    pet_img: nib.Nifti1Image,
-    ct_img: nib.Nifti1Image,
-    breast_mask_img: nib.Nifti1Image,
-    tumor_mask_img: nib.Nifti1Image,
-    iso=ISO_SPACING,
-):
-    # 1) RAS+
-    pet_r, ct_r = _to_RAS(pet_img), _to_RAS(ct_img)
-    br_r,  tu_r = _to_RAS(breast_mask_img), _to_RAS(tumor_mask_img)
+def isotropic_and_align_to_pet_sitk(
+    pet_img: sitk.Image,
+    ct_img: sitk.Image,
+    breast_mask_img: sitk.Image,
+    tumor_mask_img: sitk.Image,
+    iso_spacing: tuple = (2.0, 2.0, 2.0)
+) -> Tuple[sitk.Image, sitk.Image, sitk.Image, sitk.Image, tuple]:
+    """
+    Rend le PET isotropique, puis aligne le CT et les masques strictement sur cette nouvelle grille.
+    GARANTIE : Ne détruit pas la Matrice de Direction (Direction Cosine) ni l'Origine Spatiale.
+    """
+    # 1. Création de la grille de Référence (Le PET rendu Isotropique)
+    orig_size = pet_img.GetSize()
+    orig_spacing = pet_img.GetSpacing()
+    
+    # Calcul des nouvelles dimensions pour conserver le même volume physique
+    new_size = [
+        int(round(orig_size[0] * (orig_spacing[0] / iso_spacing[0]))),
+        int(round(orig_size[1] * (orig_spacing[1] / iso_spacing[1]))),
+        int(round(orig_size[2] * (orig_spacing[2] / iso_spacing[2])))
+    ]
+    
+    resampler_pet = sitk.ResampleImageFilter()
+    resampler_pet.SetSize(new_size)
+    resampler_pet.SetOutputSpacing(iso_spacing)
+    resampler_pet.SetOutputOrigin(pet_img.GetOrigin())
+    resampler_pet.SetOutputDirection(pet_img.GetDirection())
+    resampler_pet.SetInterpolator(sitk.sitkBSpline)
+    resampler_pet.SetDefaultPixelValue(0.0) # Fond à 0 pour le PET
+    
+    pet_iso = resampler_pet.Execute(pet_img)
 
-    # 2) Each -> isotropic
-    pet_iso = _resample_to_output(pet_r, spacing=iso, is_mask=False)
-    ct_iso  = _resample_to_output(ct_r,  spacing=iso, is_mask=False)
-    br_iso  = _resample_to_output(br_r,  spacing=iso, is_mask=True)
-    tu_iso  = _resample_to_output(tu_r,  spacing=iso, is_mask=True)
+    # 2. Fonction utilitaire pour aligner les autres modalités sur ce PET_iso
+    def align_to_ref(moving_img: sitk.Image, is_mask: bool, pad_value: float) -> sitk.Image:
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetReferenceImage(pet_iso)
+        # B-Spline pour les images continues (CT), NearestNeighbor pour les masques binaire (0 ou 1)
+        resampler.SetInterpolator(sitk.sitkNearestNeighbor if is_mask else sitk.sitkBSpline)
+        resampler.SetDefaultPixelValue(pad_value)
+        return resampler.Execute(moving_img)
 
-    # 3) Align to PET isotropic grid
-    ct_on_pet = _resample_from_to(pet_iso, ct_iso, is_mask=False)
-    br_on_pet = _resample_from_to(pet_iso, br_iso, is_mask=True)
-    tu_on_pet = _resample_from_to(pet_iso, tu_iso, is_mask=True)
+    # 3. Exécution de l'alignement
+    ct_iso     = align_to_ref(ct_img, is_mask=False, pad_value=-1000.0) # -1000 = Air au scanner
+    breast_iso = align_to_ref(breast_mask_img, is_mask=True, pad_value=0.0)
+    tumor_iso  = align_to_ref(tumor_mask_img, is_mask=True, pad_value=0.0)
+    
+    # Sécurité binaire (force les masques à être de type UInt8 et strictement à 0 ou 1)
+    breast_iso = sitk.Cast(breast_iso > 0, sitk.sitkUInt8)
+    tumor_iso  = sitk.Cast(tumor_iso > 0, sitk.sitkUInt8)
 
-    pet = pet_iso.get_fdata(dtype=np.float32)
-    ct  = ct_on_pet.get_fdata(dtype=np.float32)
-    breast = (br_on_pet.get_fdata(dtype=np.float32) > 0.5)
-    tumor  = (tu_on_pet.get_fdata(dtype=np.float32) > 0.5)
-
-    assert pet.shape == ct.shape == breast.shape == tumor.shape, "Aligned shapes differ"
-    spacing = tuple(float(x) for x in pet_iso.header.get_zooms()[:3])
-    return pet, ct, breast, tumor, spacing
+    return pet_iso, ct_iso, breast_iso, tumor_iso, pet_iso.GetSpacing()
 
 # --------------------------
 # Utils / ROI cropping
@@ -273,10 +294,19 @@ def case_features(case_id: str,
                   ct_binwidth_hu: float = 50.0,      # coarser bins -> faster
                   enable_log: bool = False,          # unused
                   enable_wavelet: bool = False) -> Dict[str, float]:  # unused
-    # 1) Isotropic (2mm) + align to PET grid
-    pet, ct, breast, tumor, spacing = isotropic_and_align_to_pet(
-        pet_img, ct_img, breast_mask_img, tumor_mask_img, iso=ISO_SPACING
+
+    # 1) Isotropique (2mm) + alignement
+    # ATTENTION : tes images d'entrée doivent désormais être lues avec sitk.ReadImage, pas nib.load !
+    pet_sitk, ct_sitk, breast_sitk, tumor_sitk, spacing = isotropic_and_align_to_pet_sitk(
+        pet_img_sitk, ct_img_sitk, breast_mask_sitk, tumor_mask_sitk, iso=(2.0, 2.0, 2.0)
     )
+    
+    # 2) Conversion en NumPy pour tes calculs rapides (MTV, TLG, SUVpeak...)
+    # L'ordre sera (Z, Y, X)
+    pet_np = sitk.GetArrayFromImage(pet_sitk)
+    ct_np = sitk.GetArrayFromImage(ct_sitk)
+    breast_np = sitk.GetArrayFromImage(breast_sitk)
+    tumor_np = sitk.GetArrayFromImage(tumor_sitk)
 
     # 2) Crop to breast bbox (+ margin)
     [pet, ct, breast, tumor], _ = _crop_to_mask_bbox([pet, ct, breast, tumor], breast, spacing, margin_mm=12.0)
@@ -316,13 +346,32 @@ def case_features(case_id: str,
     keep_ct = ["ct_tumor_HU_mean","ct_tumor_HU_std","ct_tumor_HU_min","ct_tumor_HU_median","ct_tumor_HU_max","ct_tumor_HU_p10","ct_tumor_HU_p90"]
     feats.update({k: fo_ct_tumor[k] for k in keep_ct})
 
-    # ---- Minimal PyRadiomics on ring 0–5 mm for PET & CT (~16 × 2 = ~32)
+    # On donns directement les objets SimpleITK natifs à l'extracteur !
+    # ---- Minimal PyRadiomics on ring 0–5 mm for PET & CT ----
     if enable_pyradiomics:
         try:
+            # 1. On reconvertit l'anneau Numpy en objet SimpleITK
+            ring_sitk = sitk.GetImageFromArray(ring05.astype(np.uint8))
+            # 2. CRITIQUE : On copie l'Origine, l'Espacement et la Direction depuis l'image PET
+            ring_sitk.CopyInformation(pet_sitk)
+
+            # 3. Extraction PET
             pet_extr = _make_basic_ring_extractor(pet_binwidth_suv, glcm_distances=[1])
-            ct_extr  = _make_basic_ring_extractor(ct_binwidth_hu,  glcm_distances=[1])
-            feats.update(_pyrad_ring_features(pet_extr, pet, ring05, spacing, prefix="pyrad_pet_ring0to5__"))
-            feats.update(_pyrad_ring_features(ct_extr,  ct,  ring05, spacing, prefix="pyrad_ct_ring0to5__"))
+            pet_feats = pet_extr.execute(pet_sitk, ring_sitk, label=1)
+            
+            # 4. Extraction CT (on utilise le même masque géométriquement parfait)
+            ct_extr = _make_basic_ring_extractor(ct_binwidth_hu, glcm_distances=[1])
+            ct_feats = ct_extr.execute(ct_sitk, ring_sitk, label=1)
+
+            # Nettoyage et ajout des préfixes (comme dans ton _pyrad_ring_features original)
+            for k, v in pet_feats.items():
+                if not str(k).startswith("diagnostics_"):
+                    feats[f"pyrad_pet_ring0to5__{k}"] = float(np.asarray(v).item())
+                    
+            for k, v in ct_feats.items():
+                if not str(k).startswith("diagnostics_"):
+                    feats[f"pyrad_ct_ring0to5__{k}"] = float(np.asarray(v).item())
+
         except Exception as e:
             feats["pyradiomics_error"] = 1
             feats["pyradiomics_error_msg"] = str(e)
