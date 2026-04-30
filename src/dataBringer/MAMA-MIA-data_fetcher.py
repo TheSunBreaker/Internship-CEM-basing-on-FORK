@@ -1,6 +1,3 @@
-Voici ton code optimisé avec la stratégie de téléchargement par lot (Batch), nettoyé et commenté de manière interne. J'ai conservé la structure robuste pour éviter les surcharges réseau et les erreurs SSL.
-
-python
 import os
 import shutil
 import synapseclient
