@@ -248,8 +248,14 @@ def extract_from_nnunet(
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     
     # Règle d'or absolue pour ce script : on ne normalise PAS ici, ça a été fait avant.
-    extractor_params = {"binWidth": 25.0, "normalize": False, "label": 1}
-
+    extractor_params = {
+        "binWidth": 25.0, 
+        "normalize": False, 
+        "label": 1,
+        "resampledPixelSpacing": [1, 1, 1], # Forcer des cubes de 1x1x1 mm
+        "interpolator": "sitkBSpline"       # Interpolation douce pour l'image
+    }
+    
     # Création de la liste des tâches
     raw_tasks = find_multiphase_tasks_nnunet(imagesTr_dir, labelsTr_dir)
     tasks = []
