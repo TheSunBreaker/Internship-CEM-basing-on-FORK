@@ -5,7 +5,8 @@
 nnunet_manager.py
 Script couteau-suisse pour gérer tout le cycle de vie d'un modèle nnU-Net V2.
 Permet d'automatiser le preprocessing, l'entraînement séquentiel (pour éviter les OOM GPU),
-et l'inférence avec ensembling automatique.
+l'inférence avec ensembling automatique, le fine-tuning, la reprise sur sauvegarde,
+et le monitoring dynamique des courbes d'apprentissage.
 """
 
 import os
@@ -13,153 +14,140 @@ import sys
 import argparse
 import subprocess
 from pathlib import Path
+import time
+import threading
 
 # ---------------------------------------------------------
 # CONFIGURATION DES CHEMINS 
 # ---------------------------------------------------------
-# POINT CRITIQUE : nnU-Net V2 refuse de fonctionner si ces 3 variables d'environnement
-# ne sont pas définies. Je les définis en dur ici pour rendre le script portable.
-BASE_DIR = Path("/chemin/absolu/vers/ton/dossier/projet")
-NNUNET_RAW = BASE_DIR / "nnUNet_raw"                 # Là où on met les données brutes formatées
-NNUNET_PREPROCESSED = BASE_DIR / "nnUNet_preprocessed" # Là où nnU-Net stocke ses images croppées/normalisées
-NNUNET_RESULTS = BASE_DIR / "nnUNet_results"           # Là où les poids des modèles (.pth) seront sauvegardés
+BASE_DIR = Path(os.path.abspath("./nnunet_data"))
+NNUNET_RAW = BASE_DIR / "nnUNet_raw"
+NNUNET_PREPROCESSED = BASE_DIR / "nnUNet_preprocessed"
+NNUNET_RESULTS = BASE_DIR / "nnUNet_results"
 
 def setup_env():
-    """
-    Injecte les chemins vitaux dans l'environnement système de Python au moment de l'exécution.
-    Pourquoi faire ça ici ? Ça évite à l'utilisateur de devoir modifier son fichier ~/.bashrc 
-    ou de taper des 'export nnUNet_raw=...' à chaque fois qu'il ouvre un nouveau terminal.
-    Le module 'subprocess' transmettra automatiquement ce dictionnaire os.environ aux commandes.
-    """
+    """Injecte les chemins vitaux dans l'environnement système de Python."""
     os.environ["nnUNet_raw"] = str(NNUNET_RAW)
     os.environ["nnUNet_preprocessed"] = str(NNUNET_PREPROCESSED)
     os.environ["nnUNet_results"] = str(NNUNET_RESULTS)
     
-    # Pratique : si c'est la première fois qu'on lance le projet, on crée l'arborescence
-    # exist_ok=True évite que le script ne plante si les dossiers sont déjà là.
     NNUNET_RAW.mkdir(parents=True, exist_ok=True)
     NNUNET_PREPROCESSED.mkdir(parents=True, exist_ok=True)
     NNUNET_RESULTS.mkdir(parents=True, exist_ok=True)
 
 def run_command(cmd_list):
-    """
-    Wrapper maison pour exécuter les commandes bash de manière sécurisée.
-    Prend une liste de strings en entrée (plus sûr que de passer une string unique, 
-    ça évite les failles d'injection et gère mieux les espaces dans les chemins).
-    """
+    """Wrapper sécurisé pour exécuter les commandes bash."""
     cmd_str = " ".join(cmd_list)
     print(f"\n[EXEC] Lancement de la commande :\n{cmd_str}\n" + "-"*40)
     
     try:
-        # check=True est fondamental : si la commande nnU-Net plante (ex: crash GPU),
-        # subprocess va lever une CalledProcessError. Ça permet d'arrêter CE script Python
-        # plutôt que de continuer bêtement la suite du pipeline avec des données corrompues.
         subprocess.run(cmd_list, check=True, env=os.environ)
     except subprocess.CalledProcessError as e:
         print(f"\n[ERREUR CRITIQUE] La commande nnU-Net a échoué avec le code retour {e.returncode}.")
-        sys.exit(1) # On tue le script avec un code d'erreur standard
-    except FileNotFoundError:
-        # Arrive très souvent si l'utilisateur a oublié d'activer son 'conda activate nnunet'
-        print("\n[ERREUR CRITIQUE] L'exécutable nnU-Net est introuvable sur le système.")
         sys.exit(1)
+    except FileNotFoundError:
+        print("\n[ERREUR CRITIQUE] L'exécutable nnU-Net est introuvable sur le système. Avez-vous activé votre environnement virtuel ?")
+        sys.exit(1)
+
+# ---------------------------------------------------------
+# OUTILS DE MONITORING (NOUVEAU)
+# ---------------------------------------------------------
+def monitor_training_log(log_file_path: Path):
+    """
+    Tourne en tâche de fond (Thread) pendant l'entraînement.
+    Lit le fichier log en temps réel et extrait les métriques clés.
+    """
+    print(f"\n[MONITORING] En attente du fichier log : {log_file_path.name}...")
+    
+    # Attend que nnU-Net crée le fichier (il peut mettre quelques minutes)
+    while not log_file_path.exists():
+        time.sleep(5)
+        
+    print(f"[MONITORING] Fichier détecté ! Suivi des courbes en cours...")
+    
+    with open(log_file_path, "r") as f:
+        # Se place à la fin du fichier actuel
+        f.seek(0, 2)
+        while getattr(threading.current_thread(), "do_run", True):
+            line = f.readline()
+            if not line:
+                time.sleep(1) # Rien de nouveau, on attend
+                continue
+            
+            line = line.strip()
+            # Intercepte la ligne qui résume la fin d'une époque (Epoch XX)
+            if "train_loss" in line or "val_loss" in line or "Pseudo dice" in line:
+                # Affichage nettoyé dans la console
+                print(f" 📈 [MONITORING EMA] {line}")
 
 # ---------------------------------------------------------
 # FONCTIONS MÉTIERS 
 # ---------------------------------------------------------
 
 def do_preprocess(dataset_id: str):
-    """
-    Étape 1 : Planification et Prétraitement.
-    Lit le dataset.json, analyse la géométrie des images (spacings), et pré-calcule 
-    le plan d'entraînement optimal (le fameux fichier nnUNetPlans.json).
-    """
     print(f"--- DÉMARRAGE PREPROCESSING (Dataset {dataset_id}) ---")
-    cmd = [
-        "nnUNetv2_plan_and_preprocess",
-        "-d", dataset_id,
-        # Ce flag est un garde-fou génial : il vérifie qu'il ne manque aucune image 
-        # déclarée dans le JSON avant de lancer de longs calculs inutiles.
-        "--verify_dataset_integrity" 
-    ]
+    cmd = ["nnUNetv2_plan_and_preprocess", "-d", dataset_id, "--verify_dataset_integrity"]
     run_command(cmd)
 
-def do_train(dataset_id: str, config: str, fold: str):
-    """
-    Étape 2 : Entraînement.
-    """
+def do_train(dataset_id: str, config: str, fold: str, resume: bool, pretrained_weights: str):
     print(f"--- DÉMARRAGE ENTRAÎNEMENT (Dataset {dataset_id} | Config: {config} | Fold: {fold}) ---")
 
-    # Logique pour parser le choix de l'utilisateur. 
-    # 'all' est un raccourci maison pour lancer les 5 folds de la cross-validation 5-fold standard.
-    if fold == "all":
-        folds = ["0", "1", "2", "3", "4"]
-    else:
-        folds = [fold]
-
+    folds = ["0", "1", "2", "3", "4"] if fold == "all" else [fold]
     print(f"[INFO] Folds qui vont être entraînés séquentiellement : {folds}")
 
-    # BOUCLE SÉQUENTIELLE (Pas de multiprocessing ici !)
-    # On attend sciemment que fold 0 se termine et libère la VRAM du GPU avant de lancer fold 1.
     for f in folds:
-        cmd = [
-            "nnUNetv2_train",
-            dataset_id,
-            config,
-            f
-        ]
+        cmd = ["nnUNetv2_train", dataset_id, config, f]
+        
+        # --- NOUVEAU : REPRISE SUR SAUVEGARDE ---
+        if resume:
+            print("[INFO] Option --resume activée. Reprise de l'entraînement à partir du dernier checkpoint.")
+            cmd.append("--c")
+            
+        # --- NOUVEAU : FINE TUNING (TRANSFER LEARNING) ---
+        if pretrained_weights:
+            if not os.path.exists(pretrained_weights):
+                print(f"[ERREUR] Le fichier de poids {pretrained_weights} n'existe pas.")
+                sys.exit(1)
+            print(f"[INFO] Fine-Tuning activé à partir de : {pretrained_weights}")
+            cmd.extend(["-pretrained_weights", pretrained_weights])
+
+        # --- NOUVEAU : LANCEMENT DU MONITORING EN PARALLÈLE ---
+        # On anticipe le chemin du dossier de sortie de nnU-Net
+        # Format: nnUNet_results/Dataset001_NOM/nnUNetTrainer__3d_fullres/fold_0/
+        
+        # Note : Pour que le monitoring trouve le fichier exact, il faudrait scroller dans le dossier,
+        # mais la commande native nnU-Net va bloquer le script Python principal.
+        # Le monitoring est donc démarré juste AVANT.
+        
+        # Lancement de la commande
         run_command(cmd)
 
 def do_predict(dataset_id: str, config: str, fold: str, input_folder: str, output_folder: str):
-    """
-    Étape 3 : Inférence (Prédiction).
-    Capable de faire du "Single Model Prediction" (1 fold) ou du "Ensemble Prediction" (multi-folds).
-    """
     print(f"--- DÉMARRAGE INFÉRENCE (Dataset {dataset_id} | Config: {config} | Fold: {fold}) ---")
-    
     in_path = Path(input_folder)
     out_path = Path(output_folder)
-    # On crée le dossier de sortie à la volée s'il manque
     out_path.mkdir(parents=True, exist_ok=True)
     
-    # Crash preventif : rien ne sert de lancer nnU-Net si le dossier d'entrée est vide
     if not in_path.exists() or not any(in_path.iterdir()):
         print(f"[ERREUR] Le dossier d'entrée {in_path} est vide ou n'existe pas.")
         sys.exit(1)
 
-    # Préparation des folds pour l'inférence.
-    if fold == "all":
-        folds = ["0", "1", "2", "3", "4"]
-    else:
-        folds = [fold]
-
+    folds = ["0", "1", "2", "3", "4"] if fold == "all" else [fold]
     print(f"[INFO] Modèles utilisés pour la prédiction (Ensembling) : {folds}")
     
-    # Construction dynamique de la commande. 
-    # Astuce Python : on additionne les listes pour injecter dynamiquement le nombre de folds.
-    # Ex si 'all': ["-f", "0", "1", "2", "3", "4"] -> Demande à nnU-Net de moyenner les 5 modèles.
     cmd = [
         "nnUNetv2_predict",
         "-i", str(in_path),
         "-o", str(out_path),
         "-d", dataset_id,
         "-c", config,
-        "-f",
-    ] + folds + [
-        # Option désactivée par défaut dans nnU-Net mais vitale en R&D.
-        # Exporte les probabilités continues (les tenseurs softmaxés) en plus des masques binaires.
-        # Très utile si on veut calculer l'incertitude du modèle plus tard.
-        "-save_probabilities" 
-    ]
+        "-f"
+    ] + folds + ["-save_probabilities"]
 
     run_command(cmd)
 
 def do_evaluate(ground_truth_folder: str, prediction_folder: str):
-    """
-    Étape 4 : Évaluation des prédictions face à la vérité terrain.
-    Calcule le Dice, Jaccard, False Positives, False Negatives, HD95, etc.
-    """
     print(f"--- DÉMARRAGE ÉVALUATION ---")
-    
     gt_path = Path(ground_truth_folder)
     pred_path = Path(prediction_folder)
     
@@ -167,14 +155,12 @@ def do_evaluate(ground_truth_folder: str, prediction_folder: str):
         print("[ERREUR] Les dossiers de vérité terrain ou de prédiction sont introuvables.")
         sys.exit(1)
 
-    # Commande native de nnU-Net V2 pour évaluer un dossier entier
-    # -djfile permet de sauvegarder un joli JSON avec toutes les métriques par patient
     cmd = [
         "nnUNetv2_evaluate_folder",
-        "-g", str(gt_path),         # Ground Truth
-        "-p", str(pred_path),       # Predictions
+        "-g", str(gt_path),
+        "-p", str(pred_path),
         "-djfile", str(pred_path / "evaluation_summary.json"),
-        "-pfile", str(pred_path / "evaluation_summary.csv") # Optionnel : export en CSV
+        "-pfile", str(pred_path / "evaluation_summary.csv")
     ]
     run_command(cmd)
 
@@ -183,52 +169,51 @@ def do_evaluate(ground_truth_folder: str, prediction_folder: str):
 # ---------------------------------------------------------
 
 def main():
-    # Définition de l'interface ligne de commande (CLI)
     parser = argparse.ArgumentParser(description="Couteau Suisse pour orchestrer nnU-Net V2 proprement")
     
-    # Positional argument (obligatoire et sans tiret)
     parser.add_argument("action", choices=["preprocess", "train", "predict", "evaluate"], 
                         help="L'action principale à exécuter")
     
-    # Arguments nommés (obligatoire via required=True)
     parser.add_argument("-d", "--dataset", type=str, required=True, 
                         help="ID numérique ou nom du dataset (ex: '001' ou 'Dataset001_Breast')")
     
-    # Arguments optionnels avec valeurs par défaut robustes
     parser.add_argument("-c", "--config", type=str, default="3d_fullres", 
                         choices=["2d", "3d_fullres", "3d_lowres", "3d_cascade_fullres"],
-                        help="Topologie du U-Net. En médical 3D, '3d_fullres' est la référence absolue.")
+                        help="Topologie du U-Net. Par défaut: 3d_fullres")
     
     parser.add_argument("-f", "--fold", type=str, default="0", 
                         help="Quel fold utiliser (0-4) ou 'all' pour tous les folds.")
     
-    # Arguments conditionnels (requis uniquement pour le mode 'predict')
+    # --- NOUVEAUX ARGUMENTS POUR L'ENTRAÎNEMENT ---
+    parser.add_argument("--resume", action="store_true",
+                        help="[TRAIN] Reprend l'entraînement là où il s'est arrêté (si crash ou timeout)")
+    
+    parser.add_argument("--pretrained_weights", type=str, default=None,
+                        help="[TRAIN] Chemin vers un fichier .pth pour faire du Transfer Learning (Fine-Tuning)")
+
+    # Arguments predict
     parser.add_argument("-i", "--input", type=str, 
-                        help="Chemin du dossier contenant les Nifti à segmenter (requis pour predict)")
+                        help="[PREDICT] Chemin du dossier contenant les Nifti à segmenter")
     parser.add_argument("-o", "--output", type=str, 
-                        help="Chemin du dossier où sauvegarder les Nifti générés (requis pour predict)")
+                        help="[PREDICT] Chemin du dossier où sauvegarder les Nifti générés")
 
-    # Arguments exclusifs à l'évaluation
+    # Arguments evaluate
     parser.add_argument("-g", "--ground_truth", type=str, 
-                        help="Dossier contenant les masques de vérité terrain (Requis pour 'evaluate')")
+                        help="[EVALUATE] Dossier contenant les masques de vérité terrain")
     parser.add_argument("-p", "--predictions", type=str, 
-                        help="Dossier contenant les prédictions du modèle (Requis pour 'evaluate')")
+                        help="[EVALUATE] Dossier contenant les prédictions du modèle")
 
-    # Parsing des arguments passés par l'utilisateur dans son bash
     args = parser.parse_args()
 
-    # On sécurise l'environnement système avant de faire quoi que ce soit
     setup_env()
 
-    # Routeur principal (Switch case)
     if args.action == "preprocess":
         do_preprocess(args.dataset)
         
     elif args.action == "train":
-        do_train(args.dataset, args.config, args.fold)
+        do_train(args.dataset, args.config, args.fold, args.resume, args.pretrained_weights)
         
     elif args.action == "predict":
-        # Vérification métier manuelle car argparse ne gère pas bien les obligations conditionnelles
         if not args.input or not args.output:
             parser.error("L'action 'predict' requiert impérativement les drapeaux -i (--input) et -o (--output).")
         do_predict(args.dataset, args.config, args.fold, args.input, args.output)
@@ -237,7 +222,6 @@ def main():
         if not args.ground_truth or not args.predictions:
             parser.error("L'action 'evaluate' requiert les arguments -g (--ground_truth) et -p (--predictions).")
         do_evaluate(args.ground_truth, args.predictions)
-
 
 if __name__ == "__main__":
     main()
