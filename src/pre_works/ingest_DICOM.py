@@ -1,174 +1,152 @@
-import os
-import pydicom
-import SimpleITK as sitk
-import shutil
+#!/usr/bin/env python3
+"""
+Script d'ingestion DICOM robuste.
+Groupe les fichiers par SeriesInstanceUID pour gérer les dossiers "fourre-tout" des hôpitaux,
+extrait les métadonnées de chaque série, filtre (T1/DCE, CT, PET) et convertit en NIfTI.
+"""
 
-#TAF : On hypothèse que les séries sont rangées dans dossiers distincs donc que pas possible d'avoir 2 séries dans  dossiers différents. Mais si jamais la réalité terrain dit autrement, il faut modiff le code
-#TAF : S'assurer que phases des DCE sont dans des séries différentes
 # IMPORTANT : Ce code ne gère pas la conversion en SUV val, ilf audra donc le faire à part
 
-def get_dicom_metadata(dicom_dir: str) -> dict:
-    """
-    Scanne un dossier pour trouver un fichier DICOM valide et extraire ses métadonnées.
-    C'est la carte d'identité de notre série d'images.
-    """
-    fichiers = [os.path.join(dicom_dir, f) for f in os.listdir(dicom_dir) if os.path.isfile(os.path.join(dicom_dir, f))]
-    
-    # On teste les fichiers un par un jusqu'à trouver un vrai DICOM
-    for f in fichiers:
-        try:
-            # stop_before_pixels=True évite de charger l'image lourde en mémoire, on lit juste le texte
-            ds = pydicom.dcmread(f, stop_before_pixels=True)
-            return {
-                "PatientID": str(getattr(ds, "PatientID", "UNKNOWN")),
-                "Modality": str(getattr(ds, "Modality", "UNKNOWN")),
-                "SeriesDescription": str(getattr(ds, "SeriesDescription", "UNKNOWN")),
-                "SeriesTime": str(getattr(ds, "SeriesTime", "000000")), # Utile pour trier les phases IRM
-            }
-        except Exception:
-            # Ce n'est pas un fichier DICOM (ex: un .txt ou fichier caché), on passe au suivant
-            continue
-            
-    return {} # Si on arrive ici, le dossier ne contient aucun DICOM
+import os
+import shutil
+import pydicom
+import SimpleITK as sitk
+from collections import defaultdict
 
-
-def convert_dicom_series_to_nifti(dicom_dir: str, output_path: str):
+def scan_and_group_dicoms(root_dir: str) -> dict:
     """
-    Convertit une série DICOM contenue dans un dossier vers un fichier NIfTI unique.
+    Parcourt récursivement un dossier et regroupe tous les fichiers DICOM valides
+    en fonction de leur SeriesInstanceUID.
+    Retourne un dictionnaire : { 'SeriesInstanceUID': [liste_des_chemins_fichiers] }
     """
-    reader = sitk.ImageSeriesReader()
-    series_ids = reader.GetGDCMSeriesIDs(dicom_dir)
+    print("--- 1. SCAN ET REGROUPEMENT DES SÉRIES DICOM ---")
+    series_dict = defaultdict(list)
     
-    if not series_ids:
+    for root, _, files in os.walk(root_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            try:
+                # Lecture rapide de l'en-tête (sans charger les lourds pixels en mémoire)
+                ds = pydicom.dcmread(file_path, stop_before_pixels=True)
+                
+                # Le SeriesInstanceUID est l'identifiant strict d'une séquence
+                if hasattr(ds, 'SeriesInstanceUID'):
+                    series_dict[ds.SeriesInstanceUID].append(file_path)
+            except Exception:
+                # Ce n'est pas un DICOM valide (ex: un .txt ou un fichier caché OS)
+                continue
+                
+    print(f" -> {len(series_dict)} séries uniques trouvées dans l'arborescence.\n")
+    return series_dict
+
+def get_series_metadata(file_paths: list) -> dict:
+    """
+    Extrait les métadonnées cliniques à partir du premier fichier d'une série.
+    """
+    if not file_paths:
+        return {}
+        
+    try:
+        ds = pydicom.dcmread(file_paths[0], stop_before_pixels=True)
+        return {
+            "PatientID": str(getattr(ds, "PatientID", "UNKNOWN")),
+            "Modality": str(getattr(ds, "Modality", "UNKNOWN")),
+            "SeriesDescription": str(getattr(ds, "SeriesDescription", "UNKNOWN")).upper(),
+            "SeriesTime": str(getattr(ds, "SeriesTime", "000000")),
+        }
+    except Exception:
+        return {}
+
+def convert_files_to_nifti(file_paths: list, output_path: str) -> bool:
+    """
+    Prend une liste de fichiers DICOM appartenant à la même série et les convertit en NIfTI.
+    """
+    if not file_paths:
         return False
-
-    # IMPORTANT : On fai tl'hypothèse qu'un dossier contient une seule série. SI les réalité du terrain disent autrement, faudra adapter le code
-    # On prend la première série trouvée dans le dossier
-    dicom_names = reader.GetGDCMSeriesFileNames(dicom_dir, series_ids[0])
-    reader.SetFileNames(dicom_names)
-
+        
+    reader = sitk.ImageSeriesReader()
+    # On donne directement la liste des fichiers à SimpleITK, contournant le problème des dossiers
+    reader.SetFileNames(file_paths)
+    
     try:
         image = reader.Execute()
-        # Création des dossiers parents (ex: imgs/) si ce n'est pas déjà fait
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         sitk.WriteImage(image, output_path)
         return True
     except Exception as e:
-        print(f"   [ERREUR] Conversion échouée pour {dicom_dir} : {e}")
+        print(f"   [ERREUR] Conversion échouée pour {output_path} : {e}")
         return False
 
-
 def ingest_raw_dicoms(raw_data_root: str, out_mri_root: str, out_petct_root: str, dict_anonymisation: dict = None):
-    """
-    Parcourt RÉCURSIVEMENT les dossiers de l'hôpital.
-    Route les données vers DEUX univers séparés (IRM vs PET/CT).
-    """
-    mri_phases_by_patient = {}
-
-    print("--- 1. SCAN RÉCURSIF DES DOSSIERS ---")
-    dossiers_series = []
     
-    # os.walk descend automatiquement dans tous les sous-dossiers, peu importe la profondeur !
-    for root, dirs, files in os.walk(raw_data_root):
-        if files:
-            # S'il y a des fichiers dans ce sous-dossier, on l'ajoute à notre liste d'inspection
-            dossiers_series.append(root) #Logiquement si on a au moins 1 fichier dans un rep, il est pris, alors il faut veiller à ce que cela soit pris en compte
-
-    print(f"{len(dossiers_series)} dossiers potentiels trouvés. Analyse des métadonnées...")
-
-    for dossier in dossiers_series:
-        meta = get_dicom_metadata(dossier)
+    # 1. On scanne tout et on regroupe par série, peu importe l'organisation des dossiers
+    series_groups = scan_and_group_dicoms(raw_data_root)
+    mri_phases_by_patient = defaultdict(list)
+    
+    print("--- 2. ANALYSE ET ROUTAGE DES SÉRIES ---")
+    
+    for series_uid, file_paths in series_groups.items():
+        meta = get_series_metadata(file_paths)
         if not meta:
-            continue # Pas de DICOM ici, on ignore
-
+            continue
+            
         vrai_id = meta["PatientID"]
         modality = meta["Modality"]
-        description = meta["SeriesDescription"].upper() # En majuscules pour faciliter la recherche
+        description = meta["SeriesDescription"]
         
-        # --- ANONYMISATION ---
-        patient_id = vrai_id
-        if dict_anonymisation and vrai_id in dict_anonymisation:
-            patient_id = dict_anonymisation[vrai_id]
-
+        # Anonymisation
+        patient_id = dict_anonymisation.get(vrai_id, vrai_id) if dict_anonymisation else vrai_id
+        
         # --- ROUTAGE PET / CT ---
         if modality in ["PT", "CT"]:
-            print(f"\n[{modality}] {description} (Patient: {patient_id})")
+            print(f"[{modality}] {description} (Patient: {patient_id})")
             
             if modality == "PT":
-                # NOUVEAU : On ne convertit pas le PET ! 
-                # On copie les DICOM bruts dans un dossier "TEP/" pour le script SUV converter et nii maker.
-                tep_dicom_dir = os.path.join(out_petct_root, patient_id, "TEP")
-                print(f" -> Copie des DICOM bruts PET vers : {tep_dicom_dir}")
+                # On copie les DICOM bruts PET vers un nouveau dossier propre pour le script SUV
+                tep_dicom_dir = os.path.join(out_petct_root, patient_id, "TEP", series_uid)
+                os.makedirs(tep_dicom_dir, exist_ok=True)
+                for f in file_paths:
+                    shutil.copy2(f, tep_dicom_dir)
+                print(f" -> Copie des {len(file_paths)} fichiers DICOM PET effectuée.")
                 
-                # shutil.copytree copie tout le contenu du dossier source vers la destination
-                shutil.copytree(dossier, tep_dicom_dir, dirs_exist_ok=True)
-
             else: # CT
-                # Le CT, par contre, n'a pas besoin de calcul SUV, on le convertit directement en NIfTI.
                 imgs_dir = os.path.join(out_petct_root, patient_id, "imgs")
-                os.makedirs(imgs_dir, exist_ok=True)
-                
                 out_path = os.path.join(imgs_dir, f"{patient_id}_TDM.nii.gz")
                 print(f" -> Conversion CT vers : {out_path}")
-                convert_dicom_series_to_nifti(dossier, out_path)
-
-        # --- ROUTAGE IRM (AVEC FILTRE T1/DCE) ---
+                convert_files_to_nifti(file_paths, out_path)
+                
+        # --- ROUTAGE IRM (Filtre strict) ---
         elif modality == "MR":
-            # NOUVEAU : On ne garde que si "T1" ou "DCE" est dans le nom de la série
             if "T1" in description or "DCE" in description:
-                print(f"\n[IRM Validée] {description} (Patient: {patient_id})")
-                
-                if patient_id not in mri_phases_by_patient:
-                    mri_phases_by_patient[patient_id] = []
-                
+                print(f"[IRM Validée] {description} (Patient: {patient_id})")
                 mri_phases_by_patient[patient_id].append({
-                    "dicom_dir": dossier,
+                    "files": file_paths,
                     "time": meta["SeriesTime"],
                     "desc": description
                 })
-            else:
-                # C'est un T2, FLAIR, Diffusion, etc. On jette.
-                pass 
-                # print(f" [IRM Rejetée - Pas T1] {description}")
 
-        else:
-            pass # Modalité ignorée (ex: Radiographie classique CR, Dose Report SR...)
-
-    # --- TRAITEMENT ET TRI DES PHASES IRM ---
-    print("\n--- 2. SAUVEGARDE ET TRI DES PHASES IRM ---")
+    # --- 3. TRAITEMENT ET TRI TEMPOREL DES PHASES IRM ---
+    print("\n--- 3. CONVERSION ET TRI CHRONOLOGIQUE DES PHASES IRM ---")
     for patient_id, phases in mri_phases_by_patient.items():
-        # Tri chronologique selon l'heure d'acquisition DICOM
+        # Tri chronologique basé sur le SeriesTime du DICOM
         phases_triees = sorted(phases, key=lambda x: x["time"])
-        
-        # Destination : Univers IRM
         imgs_dir = os.path.join(out_mri_root, patient_id, "imgs")
-        os.makedirs(imgs_dir, exist_ok=True)
-
+        
         for index, phase in enumerate(phases_triees):
-            # Les IRMs prennent un index (_0000, _0001...) car nnU-Net les gère comme des canaux temporels
             out_path = os.path.join(imgs_dir, f"{patient_id}_{index:04d}.nii.gz")
             print(f" -> IRM Phase {index} ({phase['desc']}) vers : {out_path}")
-            convert_dicom_series_to_nifti(phase["dicom_dir"], out_path)
+            convert_files_to_nifti(phase["files"], out_path)
 
-    print("\n=== INGÉSTION, ROUTAGE ET CONVERSION TERMINÉS ===")
+    print("\n=== INGÉSTION TERMINÉE AVEC SUCCÈS ===")
 
 if __name__ == "__main__":
-    # --- CONFIGURATION DES CHEMINS ---
     DOSSIER_DICOM_VRAC = "./data_hopital_brut"
-    
-    # NOUVEAU : Deux racines bien distinctes pour ne pas mélanger les projets
     PROJET_IRM_RACINE = "./Base_IRM"
     PROJET_PETCT_RACINE = "./Base_PETCT"
     
-    # Dictionnaire d'anonymisation (facultatif)
     CORRESPONDANCES = {
         "JEAN_DUPONT_849": "DUKE_001",
         "MARIE_CURIE_112": "DUKE_002"
     }
 
-    ingest_raw_dicoms(
-        raw_data_root=DOSSIER_DICOM_VRAC, 
-        out_mri_root=PROJET_IRM_RACINE, 
-        out_petct_root=PROJET_PETCT_RACINE, 
-        dict_anonymisation=CORRESPONDANCES
-    )
+    ingest_raw_dicoms(DOSSIER_DICOM_VRAC, PROJET_IRM_RACINE, PROJET_PETCT_RACINE, CORRESPONDANCES)
